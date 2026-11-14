@@ -2,7 +2,7 @@
 
 <img width="1894" height="2084" alt="screenshot-2026-11-14_18-50-53-mpc-remote-screen-viewer" src="https://github.com/user-attachments/assets/b8954496-f485-4de4-b0cf-87e2687a3008" />
 
-https://github.com/user-attachments/assets/cb2cccaf-d772-4fb9-882e-9d0bbb0dff5f
+https://github.com/user-attachments/assets/9c56c9e5-3571-4472-ab2e-afee434daf87
 
 `mpc-remote-screen-viewer-gpui` is a Rust desktop client for MPC remote screen
 viewing, control, device audio and recording. The UI uses **Zed's GPUI**.
