@@ -1,0 +1,32 @@
+name: Check
+on: [push, pull_request]
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: python3 scripts/check-fixtures.py
+      - run: cargo fmt --all -- --check
+      - run: cargo test --locked --no-default-features
+      - run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      # Compiles/tests the output backend and selection logic without opening hardware.
+      - run: cargo test --locked --features audio-output
+      - run: cargo clippy --locked --features audio-output --all-targets -- -D warnings
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - run: cargo test --locked --no-default-features --all-targets
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: cargo check --locked --features audio-output --all-targets

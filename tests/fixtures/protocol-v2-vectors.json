@@ -1,0 +1,357 @@
+{
+  "description": "Synthetic protocol-v2 test messages and expected results, not device captures. Authentication values are calculated with Python hashlib/hmac.",
+  "authentication": {
+    "password": "example-password",
+    "salt_utf8": "remote-screen/v1",
+    "iterations": 10000,
+    "derived_key_hex": "bd7a411e5f8652602c4b79a3c090f302d50d7dc38c5ff11ce2a799bb96e9ad1b",
+    "server_nonce_hex": "000102030405060708090a0b0c0d0e0f",
+    "client_nonce_hex": "101112131415161718191a1b1c1d1e1f",
+    "client_proof_hex": "99d2863602b1d0827f919c82b963f22f84d9f540ded1634ef640a150d9043730",
+    "server_proof_hex": "34fa4c48df24863f0582e1c2a0768f19c0b5dd4a69440e07ba85edd8f654a7c9"
+  },
+  "messages": [
+    {
+      "name": "hello_password",
+      "type": 1,
+      "payload_hex": "5253435202000100000102030405060708090a0b0c0d0e0f",
+      "message_hex": "01180000005253435202000100000102030405060708090a0b0c0d0e0f",
+      "expected": {
+        "version": 2,
+        "flags": 1,
+        "server_nonce_hex": "000102030405060708090a0b0c0d0e0f"
+      }
+    },
+    {
+      "name": "auth_all_codecs",
+      "type": 2,
+      "payload_hex": "101112131415161718191a1b1c1d1e1f99d2863602b1d0827f919c82b963f22f84d9f540ded1634ef640a150d90437301f01",
+      "message_hex": "0232000000101112131415161718191a1b1c1d1e1f99d2863602b1d0827f919c82b963f22f84d9f540ded1634ef640a150d90437301f01",
+      "expected": {
+        "client_nonce_hex": "101112131415161718191a1b1c1d1e1f",
+        "codec_mask": 31,
+        "extension": 1
+      }
+    },
+    {
+      "name": "auth_success",
+      "type": 3,
+      "payload_hex": "0134fa4c48df24863f0582e1c2a0768f19c0b5dd4a69440e07ba85edd8f654a7c9",
+      "message_hex": "03210000000134fa4c48df24863f0582e1c2a0768f19c0b5dd4a69440e07ba85edd8f654a7c9",
+      "expected": {
+        "ok": true,
+        "server_proof_hex": "34fa4c48df24863f0582e1c2a0768f19c0b5dd4a69440e07ba85edd8f654a7c9"
+      }
+    },
+    {
+      "name": "auth_failure",
+      "type": 3,
+      "payload_hex": "001561757468656e7469636174696f6e206661696c6564",
+      "message_hex": "0317000000001561757468656e7469636174696f6e206661696c6564",
+      "expected": {
+        "ok": false,
+        "reason": "authentication failed"
+      }
+    },
+    {
+      "name": "server_init_2x2",
+      "type": 4,
+      "payload_hex": "0200020020100808080008034d5043000701",
+      "message_hex": "04120000000200020020100808080008034d5043000701",
+      "expected": {
+        "width": 2,
+        "height": 2,
+        "pixel_format": [
+          32,
+          16,
+          8,
+          8,
+          8,
+          0,
+          8
+        ],
+        "name": "MPC",
+        "rotation": 0,
+        "input_capabilities": 7,
+        "audio_available": true
+      }
+    },
+    {
+      "name": "frame_raw_and_solid",
+      "type": 5,
+      "payload_hex": "2a00000000020000000000020001000000080000000000ff0000ff00000000010002000100030004000000ff000000",
+      "message_hex": "052f0000002a00000000020000000000020001000000080000000000ff0000ff00000000010002000100030004000000ff000000",
+      "expected": {
+        "frame_id": 42,
+        "quality": 0,
+        "rgba_hex": "ff0000ff00ff00ff0000ffff0000ffff",
+        "ack_frame_id": 42
+      }
+    },
+    {
+      "name": "ack_42",
+      "type": 6,
+      "payload_hex": "2a000000",
+      "message_hex": "06040000002a000000",
+      "expected": {
+        "frame_id": 42
+      }
+    },
+    {
+      "name": "request_full_refresh",
+      "type": 7,
+      "payload_hex": "",
+      "message_hex": "0700000000",
+      "expected": {}
+    },
+    {
+      "name": "set_options_15fps",
+      "type": 8,
+      "payload_hex": "0f1f",
+      "message_hex": "08020000000f1f",
+      "expected": {
+        "fps_limit": 15,
+        "codec_mask": 31
+      }
+    },
+    {
+      "name": "ping",
+      "type": 9,
+      "payload_hex": "15cd5b0700000000",
+      "message_hex": "090800000015cd5b0700000000",
+      "expected": {
+        "token": 123456789
+      }
+    },
+    {
+      "name": "pong",
+      "type": 10,
+      "payload_hex": "15cd5b0700000000",
+      "message_hex": "0a0800000015cd5b0700000000",
+      "expected": {
+        "token": 123456789
+      }
+    },
+    {
+      "name": "bye",
+      "type": 11,
+      "payload_hex": "07636c6f73696e67",
+      "message_hex": "0b0800000007636c6f73696e67",
+      "expected": {
+        "reason": "closing"
+      }
+    },
+    {
+      "name": "mouse_move_down_up_release",
+      "type": 12,
+      "payload_hex": "040300010001000000040001000100000005000100010000000700000000000000",
+      "message_hex": "0c21000000040300010001000000040001000100000005000100010000000700000000000000",
+      "expected": {
+        "event_kinds": [
+          3,
+          4,
+          5,
+          7
+        ]
+      }
+    },
+    {
+      "name": "uppercase_A",
+      "type": 12,
+      "payload_hex": "0408002a000000000008001e000000000009001e000000000009002a0000000000",
+      "message_hex": "0c210000000408002a000000000008001e000000000009001e000000000009002a0000000000",
+      "expected": {
+        "text": "A"
+      }
+    },
+    {
+      "name": "wheel_negative_one",
+      "type": 12,
+      "payload_hex": "01060001000100ffff",
+      "message_hex": "0c0900000001060001000100ffff",
+      "expected": {
+        "signed_value": -1
+      }
+    },
+    {
+      "name": "audio_enable_all",
+      "type": 13,
+      "payload_hex": "0107",
+      "message_hex": "0d020000000107",
+      "expected": {
+        "enabled": true,
+        "codec_mask": 7
+      }
+    },
+    {
+      "name": "audio_format_pcm16",
+      "type": 14,
+      "payload_hex": "80bb00000200",
+      "message_hex": "0e0600000080bb00000200",
+      "expected": {
+        "sample_rate": 48000,
+        "channels": 2,
+        "codec": 0
+      }
+    },
+    {
+      "name": "audio_format_ima_adpcm",
+      "type": 14,
+      "payload_hex": "80bb00000201",
+      "message_hex": "0e0600000080bb00000201",
+      "expected": {
+        "sample_rate": 48000,
+        "channels": 2,
+        "codec": 1
+      }
+    },
+    {
+      "name": "audio_format_lossless",
+      "type": 14,
+      "payload_hex": "80bb00000202",
+      "message_hex": "0e0600000080bb00000202",
+      "expected": {
+        "sample_rate": 48000,
+        "channels": 2,
+        "codec": 2
+      }
+    },
+    {
+      "name": "audio_pcm16",
+      "type": 15,
+      "payload_hex": "000000000000000002000080ff7f00000040",
+      "message_hex": "0f12000000000000000000000002000080ff7f00000040",
+      "expected": {
+        "codec": 0,
+        "channels": 2,
+        "first_sample_index": 0,
+        "frames": 2,
+        "samples_i16": [
+          -32768,
+          32767,
+          0,
+          16384
+        ],
+        "samples_f32": [
+          -1,
+          0.999969482421875,
+          0,
+          0.5
+        ]
+      }
+    },
+    {
+      "name": "audio_ima_adpcm",
+      "type": 15,
+      "payload_hex": "00000000000000000200000000006400000091",
+      "message_hex": "0f1300000000000000000000000200000000006400000091",
+      "expected": {
+        "codec": 1,
+        "channels": 2,
+        "first_sample_index": 0,
+        "frames": 2,
+        "samples_i16": [
+          0,
+          100,
+          1,
+          99
+        ],
+        "samples_f32": [
+          0,
+          0.0030517578125,
+          0.000030517578125,
+          0.003021240234375
+        ]
+      }
+    },
+    {
+      "name": "audio_lossless_raw_channels",
+      "type": 15,
+      "payload_hex": "0000000000000000020080040000800000800400ff7f0040",
+      "message_hex": "0f180000000000000000000000020080040000800000800400ff7f0040",
+      "expected": {
+        "codec": 2,
+        "channels": 2,
+        "first_sample_index": 0,
+        "frames": 2,
+        "samples_i16": [
+          -32768,
+          32767,
+          0,
+          16384
+        ],
+        "samples_f32": [
+          -1,
+          0.999969482421875,
+          0,
+          0.5
+        ]
+      }
+    },
+    {
+      "name": "audio_lossless_rice_simple",
+      "type": 15,
+      "payload_hex": "0000000000000000020000010000100300640000",
+      "message_hex": "0f140000000000000000000000020000010000100300640000",
+      "expected": {
+        "codec": 2,
+        "channels": 2,
+        "first_sample_index": 0,
+        "frames": 2,
+        "samples_i16": [
+          0,
+          100,
+          0,
+          100
+        ],
+        "samples_f32": [
+          0,
+          0.0030517578125,
+          0,
+          0.0030517578125
+        ]
+      }
+    },
+    {
+      "name": "device_info",
+      "type": 16,
+      "payload_hex": "034d50430b544553542d53455249414c0d746573742d6669726d77617265",
+      "message_hex": "101e000000034d50430b544553542d53455249414c0d746573742d6669726d77617265",
+      "expected": {
+        "model": "MPC",
+        "serial": "TEST-SERIAL",
+        "firmware": "test-firmware"
+      }
+    }
+  ],
+  "pixel_cases": [
+    {
+      "name": "rgb565_red",
+      "format": [
+        16,
+        11,
+        5,
+        5,
+        6,
+        0,
+        5
+      ],
+      "pixel_hex": "00f8",
+      "rgba_hex": "ff0000ff"
+    },
+    {
+      "name": "quantization_8bit_drop2",
+      "input_channel": 252,
+      "channel_bits": 8,
+      "drop_bits": 2,
+      "expanded_channel": 255
+    },
+    {
+      "name": "quantization_8bit_drop7_single_or",
+      "input_channel": 128,
+      "channel_bits": 8,
+      "drop_bits": 7,
+      "expanded_channel": 192
+    }
+  ]
+}

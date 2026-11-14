@@ -1,0 +1,22 @@
+//! Portable client core. See SPEC.md for behavior and validation requirements.
+//! No network connection is made implicitly.
+
+pub mod analyzer;
+pub mod audio;
+#[cfg(feature = "audio-output")]
+pub mod audio_output;
+pub mod auth;
+pub mod cli;
+pub mod framebuffer;
+pub mod information;
+pub mod input;
+pub mod playout;
+pub mod preferences;
+pub mod protocol;
+pub mod recording;
+pub mod session;
+pub mod spectrogram;
+pub mod statistics;
+pub mod vectorscope;
+pub mod viewport;
+pub mod waveform;
