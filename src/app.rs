@@ -18,6 +18,7 @@ use mpc_remote_screen_viewer_gpui::{
     audio,
     audio_output::{self, AudioOutput},
     cli::Launch,
+    control::Status as TeacherControlStatus,
     information,
     input::{self, Control},
     playout::{DEFAULT_TARGET_BUFFER_MS, MAX_TARGET_BUFFER_MS, MIN_TARGET_BUFFER_MS, peak_db},
@@ -149,6 +150,7 @@ pub struct Viewer {
     snapshot: Snapshot,
     teacher: Option<TeacherBridge>,
     teacher_highlight: Option<TeacherHighlight>,
+    teacher_control: Option<TeacherControlStatus>,
     viewer_settings: preferences::ViewerSettings,
     settings_writer: Option<preferences::ViewerSettingsWriter>,
     settings_error: Option<String>,
@@ -328,6 +330,7 @@ impl Viewer {
         .detach();
         cx.observe_window_activation(window, |view, window, cx| {
             if !window.is_window_active() {
+                view.stop_assisted("Viewer window deactivated");
                 view.release_input(cx);
             }
         })
@@ -425,6 +428,7 @@ impl Viewer {
             snapshot: Snapshot::default(),
             teacher: None,
             teacher_highlight: None,
+            teacher_control: None,
             settings_writer: writer.ok(),
             settings_error,
             generation: 0,
@@ -591,6 +595,21 @@ impl Viewer {
             self.teacher_highlight = highlight;
             cx.notify();
         }
+        let control = self
+            .teacher
+            .as_ref()
+            .and_then(|b| b.teacher().control())
+            .map(|c| c.status());
+        let animate = control
+            .as_ref()
+            .and_then(|s| s.feedback.as_ref())
+            .is_some_and(|f| {
+                f.phase.active() || f.visible_until.is_some_and(|until| until > Instant::now())
+            });
+        if control != self.teacher_control || animate {
+            self.teacher_control = control;
+            cx.notify();
+        }
         let session = self.session.as_ref()?;
         let state = session.snapshot();
         let sink = session.audio();
@@ -750,9 +769,7 @@ impl Viewer {
                         .audio()
                         .set_analyzer(self.analyzer.as_ref().map(|a| a.input.clone()));
                     if let Some(teacher) = &self.teacher {
-                        teacher
-                            .teacher()
-                            .set_source(Some(session.snapshot_source()));
+                        teacher.teacher().set_session(&session);
                     }
                     self.session = Some(session);
                     self.connection_address = Some(address);
@@ -850,13 +867,14 @@ impl Viewer {
         cx.notify();
     }
     fn release_input(&mut self, cx: &mut Context<Self>) {
-        if self.capabilities() != 0 {
+        if self.capabilities() != 0 && self.control.is_held() {
             self.send_input(vec![InputEvent::RELEASE_ALL], cx);
         }
         self.control.clear();
         self.drag = None;
     }
     fn remote_control(&mut self, _: &RemoteControl, window: &mut Window, cx: &mut Context<Self>) {
+        self.stop_assisted("Local remote-control toggle / takeover");
         if self.show_settings {
             return;
         }
@@ -1391,6 +1409,10 @@ impl Viewer {
     fn screen(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let image = self.image.clone();
         let highlight = self.teacher_highlight.clone();
+        let feedback = self
+            .teacher_control
+            .as_ref()
+            .and_then(|s| s.feedback.clone());
         let size = self
             .snapshot
             .screen
@@ -1424,6 +1446,14 @@ impl Viewer {
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
                 if view.control_on {
                     let held = view.control.touch || view.control.buttons.iter().any(|v| *v);
+                    if !held
+                        && view
+                            .teacher_control
+                            .as_ref()
+                            .is_some_and(|s| s.lease_active)
+                    {
+                        return; // Hover alone is not takeover; press/scroll/key or Stop is.
+                    }
                     if let Some(p) = view.pointer_position(event.position, held)
                         && view.control.last != Some(p)
                     {
@@ -1502,6 +1532,16 @@ impl Viewer {
                         if let (Some(image), Some(picture)) = (image, picture) {
                             let _ =
                                 window.paint_image(picture, Corners::default(), image, 0, false);
+                            if let Some(feedback) = feedback {
+                                teacher::paint_feedback(
+                                    &feedback,
+                                    picture,
+                                    canvas_bounds,
+                                    size,
+                                    window,
+                                    cx,
+                                );
+                            }
                             if let Some(highlight) = highlight {
                                 teacher::paint_highlight(
                                     &highlight,
@@ -1650,6 +1690,9 @@ impl Render for Viewer {
                         .occlude()
                         .child(self.teacher_indicator(cx)),
                 )
+            })
+            .when(self.teacher.is_some() && !self.show_settings, |this| {
+                this.child(self.teacher_controls(cx))
             })
             .when(self.analyzer.is_some(), |this| {
                 this.child(self.analyzer_panel(cx))

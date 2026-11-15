@@ -125,7 +125,7 @@ impl Bridge {
         let stop = Arc::new(AtomicBool::new(false));
         let cancelled = stop.clone();
         let worker = thread::Builder::new()
-            .name("read-only-teacher".into())
+            .name("ai-teacher-ipc".into())
             .spawn(move || {
                 let _guard = guard;
                 while !cancelled.load(Ordering::Acquire) {

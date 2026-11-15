@@ -24,8 +24,8 @@ Synthetic test data lives in `tests/fixtures/`.
 - Device Info panel, live FPS/bandwidth and bounded network-rate history graphs.
 - Saved viewer settings and a bounded recent-device picker; passwords are never saved.
 - Saved default screenshot folder with first-use folder selection.
-- Optional stdio MCP read-only Force teacher: local manual search/page images,
-  device observations, and expiring viewer-only guidance highlights.
+- Optional stdio MCP Force teacher (read-only by default): local manual search/page images,
+  device observations, viewer-only highlights and locally approved assisted gestures.
 - Device audio: PCM16, IMA ADPCM and predictive/Rice decoding, bounded
   playback, cubic rate conversion, drift correction and discontinuity fades.
 - Lazy output-device/rate/buffer selection, saved audio preferences, square-law
@@ -111,13 +111,14 @@ Connect and click the speaker button (or launch the viewer with `--audio`). This
 PCM16 test, not evidence of real-device codec/timing correctness. Start with low volume.
 Do not point automated tests at a real MPC without authorization.
 
-## Read-only AI teacher (MCP)
+## AI teacher (MCP, read-only by default)
 
 See [`docs/mcp-mpc.md`](docs/mcp-mpc.md) for the architecture, phased plan,
-full tool contracts and MCP-client configuration. Phase 1 exposes **state, screen
-capture, Force manual search/read, and local highlight/clear only**. It cannot
-click, drag, scroll, play audio or change the device. Assisted gestures and their
-visible cursor/path/scroll feedback are planned for phase 2.
+full tool contracts and MCP-client configuration. State/screen capture, Force manual
+search/read and local highlights work in read-only mode. Phase 2 adds bounded
+click/long-press, drag, scroll, key and ASCII-text **proposals**, plus cancellation.
+Every gesture needs a **locally granted 60-second lease and separate local approval**;
+neither enabling sharing nor an MCP argument authorizes input. No audio tools exist.
 
 Supply `manuals/Force - User Guide - v3.10.1.pdf` locally and install Poppler
 (`pdftotext`; `pdftoppm` for diagram/page images). The manual is indexed in memory;
@@ -138,6 +139,16 @@ content requested by your agent may reach its configured model. The enabled sock
 is accessible to other processes running as your OS user, not just a particular
 agent. Device credentials and serial numbers are not exported.
 
+For assisted input, use **Allow assisted proposals · 60 s**, then approve or reject
+each immutable proposal in the local teacher panel. **Stop / take over** revokes the
+lease and requests release; these controls also remain available in fullscreen.
+Local viewer input takes over only after agent release. Screen changes, disconnect,
+window deactivation and settings revoke the lease. Physical-device takeover cannot
+be detected. Cursor/held-ring/drag-path/scroll feedback reflects worker writes, not
+model intentions. A socket write is **not** visual verification: poll state, then
+inspect a fresh screen after every gesture. Never automatically retry uncertain
+input. Text is limited to 64 printable ASCII characters; do not send secrets.
+
 Highlights have a distinct AI-teacher label, follow fit/pan/rotation, expire within
 10 seconds, and never appear in device screenshots or recordings. Old observations
 cannot annotate a replaced/reconfigured/disconnected device. Manual compatibility
@@ -154,9 +165,11 @@ For Pi, use the [project-local setup instructions](docs/mcp-mpc.md#pi-configurat
 with direct tool exposure, then trust the project and reload/restart Pi. Keep the
 manual PDF and machine-specific `.pi/mcp.json` local; both are ignored by Git.
 
-The stdio smoke test exercises actual MCP initialization, all six tools and PDF
-page rendering when Poppler is available (required in the MCP CI job). A subsequent
-live Pi session exercised all six tools; the user confirmed the overlay appeared
+The stdio smoke test exercises MCP initialization, all twelve tool definitions,
+read-only proposal rejection and PDF page rendering when Poppler is available
+(required in the MCP CI job). Loopback tests cover locally approved gesture writes,
+cancellation, takeover and reconfiguration; **phase-2 GUI/Force effects remain
+unverified**. A prior phase-1 live Pi session exercised its six tools; the user confirmed the overlay appeared
 and completed a one-bar techno pattern through guided, user-performed input.
 See [live teaching evidence and limitations](docs/mcp-mpc.md#live-read-only-teaching-smoke-test).
 The agent verified note positions from screenshots; the user identified the sounds.

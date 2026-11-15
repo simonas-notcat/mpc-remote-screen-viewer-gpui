@@ -7,6 +7,7 @@ pub mod audio;
 pub mod audio_output;
 pub mod auth;
 pub mod cli;
+pub mod control;
 pub mod framebuffer;
 pub mod information;
 pub mod input;

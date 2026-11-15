@@ -181,6 +181,7 @@ impl Viewer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.stop_assisted("Settings opened locally");
         self.release_input(cx);
         if self.show_settings {
             window.close_dialog(cx);

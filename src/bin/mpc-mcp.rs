@@ -31,7 +31,7 @@ async fn run() -> Result<(), String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Force read-only teacher MCP server\n\nUsage: mpc-mcp --manual '/absolute/path/Force - User Guide - v3.10.1.pdf' [--socket PATH]\n\nRequires Poppler pdftotext (pdftoppm for page images).\nManual tools work offline. For screen/highlight tools enable View → AI Teacher (read only) in the running viewer.\nSocket defaults to MPC_TEACHER_SOCKET or the viewer's private per-user temporary socket.\nNo remote input or audio tools are exposed. Screens/manual excerpts may be sent to your configured model."
+                    "Force teacher MCP server (read-only by default)\n\nUsage: mpc-mcp --manual '/absolute/path/Force - User Guide - v3.10.1.pdf' [--socket PATH]\n\nRequires Poppler pdftotext (pdftoppm for page images).\nManual tools work offline. For screen/highlight tools enable View → AI Teacher (read only) in the running viewer.\nSocket defaults to MPC_TEACHER_SOCKET or the viewer's private per-user temporary socket.\nAssisted input proposals require a local 60-second lease and approval of EVERY gesture in the viewer. No audio tools. Never retry uncertain mutations. Screens/manual excerpts may be sent to your configured model."
                 );
                 return Ok(());
             }

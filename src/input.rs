@@ -13,6 +13,9 @@ impl Control {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
+    pub fn is_held(&self) -> bool {
+        self.touch || self.buttons.iter().any(|v| *v) || self.modifiers.iter().any(|v| *v)
+    }
     pub fn modifiers(&mut self, held: [bool; 4]) -> Vec<InputEvent> {
         let mut events = Vec::new();
         for (i, code) in [42, 29, 56, 125].into_iter().enumerate() {

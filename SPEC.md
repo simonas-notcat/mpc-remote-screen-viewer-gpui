@@ -42,7 +42,8 @@ audio transmission, a web frontend and a device-side server are outside scope.
 | `statistics.rs`, `information.rs` | Per-attempt rates/history and read-only device details |
 | `preferences.rs`, `preferences/viewer.rs` | Versioned JSON preferences and bounded recent-device history |
 | `app.rs`, `app/`, `cli.rs`, `main.rs` | GPUI presentation/actions, launch options and application lifecycle |
-| `teacher.rs`, `teacher/ipc.rs` | Read-only observations, expiring local annotations and opt-in same-user Unix IPC |
+| `teacher.rs`, `teacher/ipc.rs` | Observations, expiring local annotations, bounded input proposals and opt-in same-user Unix IPC (no remote lease/approval) |
+| `control.rs` | Local source-bound lease/per-gesture approval, input ownership, bounded worker-driven gestures and lifecycle feedback |
 | `manual.rs`, `mcp.rs`, `bin/mpc-mcp.rs` | Optional page-preserving manual index and stdio MCP adapter (feature `mcp`) |
 
 One worker owns the TCP socket and serializes all writes with `write_all`.
@@ -282,6 +283,35 @@ or forwarding device keyboard input. Focus loss, dialogs, disable, configuration
 changes and disconnect release held input and clear local bookkeeping. Queue
 overload stops the session rather than silently losing a release transition.
 
+### Assisted MCP input (phase 2)
+
+The bridge remains read-only by default. A **local-only 60-second lease** and
+separate local approval of each exact immutable proposal are required. IPC/MCP
+cannot grant/approve; unknown fields such as `confirmed` are rejected. All gestures
+are potentially destructive, not semantically classified as safe. Proposals expire
+in 20 seconds; worker execution is capped at 5 seconds and lease expiry. Click holds
+are 50–2000 ms; straight drags 100–3000 ms / at most 61 steps; scroll is nonzero
+−120…120 wire units; text is 1–64 printable US ASCII characters. Keyboard/touch/
+mouse capabilities are checked before construction and worker execution.
+
+Each proposal references a valid observation and maps returned-image crop/resize
+coordinates into upright input coordinates. Pre-proposal and in-gesture observations
+cannot authorize later input; obtain a fresh screen after each terminal result.
+Only one proposal/gesture exists at a time. The session worker schedules input,
+records actual socket-written steps, and releases on completion/cancel. Input ACKs
+and visual verification do not exist. Partial writes are uncertain and never
+retried; broken connections cannot guarantee release. No blind sequences.
+
+Human/agent arbitration covers the whole held gesture and in-flight local writes.
+Viewer input revokes/cancels agent ownership and writes release before local input.
+Sharing revocation, local Stop/F12, window deactivation, settings, lease expiry,
+disconnect/reconnect and reconfiguration revoke assisted control. Approval/reject/
+Stop remain available in fullscreen; painting never intercepts input. Local feedback
+shows pending/queued/running/completed/rejected/cancelled/uncertain states, actual
+held/cursor/path/release, signed wheel amount and non-sensitive key/text labels.
+It is excluded from captures/recordings. Physical device takeover is not detectable.
+See `docs/mcp-mpc.md` for tool contracts and remaining live acceptance checks.
+
 ## 8. Device audio and analysis
 
 AudioControl is two bytes: enabled and codec mask **`0x07`**. Do not send it unless
@@ -426,10 +456,10 @@ over CLI passwords, which can appear in process listings/history.
 never persisted. The View menu and a visible indicator (also in fullscreen) can
 disable sharing. The separate optional `mpc-mcp` executable uses stdio and requires
 an approved Force v3.10.1 PDF via `--manual`; `--socket`/`MPC_TEACHER_SOCKET` select
-local IPC only. No remote input, audio or device changes are exposed in phase 1.
-Highlights reference bounded/expiring upright observations and are local paint,
-not framebuffer modifications. Full security/tool/gesture contracts and later
-phases are in `docs/mcp-mpc.md`.
+local IPC only. Bounded phase-2 input proposals require a local lease and local
+approval for every gesture; no audio tools exist. Highlights and lifecycle feedback
+reference upright device pixels and are local paint, not framebuffer modifications.
+Full security/tool/gesture contracts and later phases are in `docs/mcp-mpc.md`.
 
 `scripts/bundle-macos.sh` creates a development `.app` with its own bundle identity,
 Local Network usage explanation and ad-hoc signing. `--universal` builds Apple
@@ -459,8 +489,9 @@ negative authentication, optional extensions, malformed lengths, all screen code
 rotations/quantization, ACKs independent of paints, reconnect/cancel/deadlines,
 input mapping/release safety, audio codec edges, bounded queues/drift/allocation-free
 rendering, preference validation/atomic writes, PNG/MOV content/timing/errors,
-and read-only teacher IPC/observation bounds, manual page retrieval, native MCP
-images and synthetic stdio tool dispatch.
+and teacher IPC/observation bounds, manual page retrieval, native MCP images,
+synthetic stdio tool dispatch, locally approved assisted input, takeover/release
+ordering, stale-evidence/deadline rejection and partial-write uncertainty.
 
 | Check | Current validation gap |
 | --- | --- |
@@ -474,6 +505,7 @@ images and synthetic stdio tool dispatch.
 | C1 | Preference restoration, recent selection, startup precedence and quit/error paths lack detailed macOS interaction validation. |
 | S1 | Inspector/graphs/scrolling/input occlusion lack detailed macOS validation. |
 | T1 | Basic live Pi teaching and user-confirmed highlight visibility succeeded. Fullscreen/revocation/reconfiguration and macOS teacher IPC still need hands-on tests; absent device model/firmware prevents exact manual compatibility confirmation. Playback captures can return `Framebuffer busy; retry`; bounded capture backoff is not automatic. |
+| T2 | Phase-2 assisted control has synthetic/loopback and desktop compile/lint coverage only. Actual Force effects and live approval/Stop/fullscreen/fit/pan/rotation rendering remain unverified; phase-1 teaching evidence is not phase-2 acceptance. |
 
 User-reported testing has succeeded on macOS and Omarchy Linux. Earlier
 connection, remote-control and screenshot-folder smoke tests also succeeded.

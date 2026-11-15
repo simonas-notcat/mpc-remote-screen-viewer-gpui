@@ -25,14 +25,14 @@ agent / MCP client
     | stdio (official Rust rmcp SDK; stdout is protocol only)
 mpc-mcp binary --- locally imported, versioned Force manual
     | permission-restricted Unix socket, bounded request/response framing
-viewer-owned Teacher controller
-    | read-only shared Session snapshot and framebuffer
+viewer-owned Teacher observation/approval controller
+    | shared Session snapshot/framebuffer + bounded, locally approved plans
 existing Session worker --- device protocol --- Force
     |
 GPUI viewer + local-only teaching overlays
 ```
 
-Use one device connection. Initially the viewer hosts the read-only controller;
+Use one device connection. The viewer hosts the observation/approval controller;
 the MCP executable attaches through local IPC. Manual lookup works even when the
 viewer is closed. Later a headless host can implement the same controller contract.
 Neither GPUI nor an audio output device is a dependency of the MCP executable.
@@ -77,7 +77,7 @@ fullscreen). Highlights expire, can be explicitly cleared, and disappear on
 revocation, disconnect, source replacement or screen reconfiguration. Their label
 explicitly identifies them as agent guidance, not actual MPC UI.
 
-Phase 2 adds a distinct agent cursor and gesture lifecycle events:
+Phase 2 adds a distinct agent cursor and gesture lifecycle events (implemented):
 
 | Gesture | Required local feedback |
 | --- | --- |
@@ -222,18 +222,91 @@ musical pattern is a teaching example, not a preset prescribed by the manual.
 
 ## Phase 2: safe assisted interaction
 
-Add `mpc_click`, `mpc_drag`, `mpc_scroll`, `mpc_press_key`, limited
-`mpc_type_text`, and `mpc_cancel`. Share input construction with the viewer through
-a GUI-independent control layer; use device capability checks and upright protocol
-coordinates. Gestures have server-enforced deadlines and automatic release.
-Arbitrate human/agent ownership for the whole gesture, not individual events.
+Implemented on `feature/mcp-assisted-interaction`, stacked on phase 1. The six
+phase-1 tools remain available; six additional tools **propose** bounded input or
+request cancellation. Sharing still starts **read only**, even when the viewer's
+ordinary remote-control preference is on. No MCP/IPC operation grants a lease or
+approves a proposal. `confirmed: true` and unknown arguments are rejected.
 
-Default remains teaching/read-only. Grant a visible, revocable control lease locally.
-Require approval for unknown/destructive workflows (delete, overwrite, format,
-project replacement, record/transport). A model-supplied `confirmed: true` and MCP
-annotations are not authorization. Generic clicks cannot be classified as safe
-reliably; begin with approval per gesture. Do not automatically retry uncertain
-mutations. Implement all visual feedback above before enabling assisted control.
+### Tools and bounds
+
+Every proposal requires `observation_id` from a fresh `mpc_get_screen`. Targets and
+drag endpoints are integer **returned-image pixels**, mapped through that exact
+observation's crop/resize into upright protocol coordinates (never inverse-rotated).
+
+| Tool | Additional arguments / bounds |
+| --- | --- |
+| `mpc_click` | `target: {x,y}`, `hold_ms?` (50–2000, default 100); long press uses a longer hold. Left button, or single-contact touch on touch-only devices. |
+| `mpc_drag` | `start: {x,y}`, `end: {x,y}`, `duration_ms?` (100–3000, default 500); straight-line path, at most 61 bounded steps. |
+| `mpc_scroll` | `target: {x,y}`, `amount` (nonzero −120…120 signed **protocol wheel units**, not browser pixels); requires mouse capability. |
+| `mpc_press_key` | `key` (supported `input.rs` Linux wire identity), `modifiers?` (`[Shift, Control, Alt, Meta]`, default false); requires keyboard capability. |
+| `mpc_type_text` | `text` (1–64 printable ASCII characters, US wire-key mapping); no Unicode, paste, newlines/control characters, or secrets. |
+| `mpc_cancel` | No arguments. Cancels pending/queued input or requests release of a running gesture. **Not rollback**; poll state for the outcome. |
+
+### Local authorization and lifecycle
+
+1. Enable the bridge as before. In the viewer's persistent teacher panel, choose
+   **Allow assisted proposals · 60 s**. This grants only a non-persisted, source-bound
+   lease; it does not approve any input. Release any local held inputs first.
+2. Inspect a new screen and propose **one** gesture. The tool returns
+   `pending_approval`, `queued: false`, and `device_input_sent: false`. It never
+   waits for approval or automatically executes/retries the proposal.
+3. The viewer shows the immutable proposal's ID, generated action summary and risk
+   warning. Choose **Approve this ONE gesture** or **Reject** locally. Approval is
+   required for **every** gesture, including delete/overwrite/format/project
+   replacement/record/transport and unknown workflows. Text/key contents are not
+   displayed or echoed in feedback; text contents must not contain secrets.
+4. Poll `mpc_get_state.assisted_control.action`: `pending_approval` → `queued` →
+   `running` → `completed`, `cancelled`, `rejected`, or `uncertain`.
+   `written_steps` changes only after successful socket writes; `release_written`
+   means only that a release was written. Neither is a device acknowledgement or
+   visual verification (`visually_verified` remains false).
+5. After a terminal result, capture a **new** screen and verify the intended change.
+   All pre-proposal and in-gesture observations are rejected for later input.
+   Animated pixels alone do not invalidate observations. Do not queue sequences or
+   automatically retry mutations, including after an IPC timeout or partial write.
+
+Proposal approval/queue time is limited to **20 seconds**; worker execution has a
+**5-second** wall-clock deadline, capped by lease/observation expiry. Approval also
+expires no later than the referenced observation's TTL. The worker schedules
+bounded steps alongside protocol traffic and checks cancellation even while waiting
+for a framebuffer reader. Completion/cancellation writes release-all on the original
+usable connection. Failed/partial writes stop the attempt, revoke the lease, and
+report an uncertain outcome; best-effort cleanup cannot guarantee release on a
+broken connection. A write already in flight when Stop is pressed cannot be recalled.
+
+The GUI-independent `control.rs` layer uses the viewer's existing `input.rs` wire
+constructors. The session worker alone owns the socket and runs gestures. It
+rechecks source/capabilities before input and releases/cancels the agent gesture
+**before** sending local viewer input. Local down/up/modifier ownership covers the
+whole held gesture, including in-flight writes. Lease expiry, local Stop, F12
+(takeover), window deactivation, settings, sharing revocation, disconnect, reconnect
+and screen reconfiguration revoke assisted control; it is never replayed on a new
+source. Device-side physical takeover cannot be reliably detected.
+
+The panel, approval/reject buttons and **Stop / take over** are available in normal
+and fullscreen views. Agent cursor/crosshair, held ring, actual traversed drag path,
+endpoint markers, signed scroll arrow and non-sensitive key/text label are painted
+in the device canvas, above pixels and below modal UI, with no input hitboxes.
+Pending/queued feedback is amber, running cyan, completed green and rejected/
+cancelled/uncertain red; terminal graphics expire/fade. Raw captures and recordings
+remain overlay-free. Disabling sharing clears guidance and requests release.
+
+### Phase-2 validation and remaining checks
+
+Automated synthetic/loopback tests cover read-only defaults, exact local approval,
+all five gesture encodings, cancellation during framebuffer contention, local
+human takeover/release ordering, source/capability rechecks, deadlines, consumed
+observations, crop/resize/all-rotation mapping, bounded paths/text, hidden text,
+failed-write uncertainty, revocation, and no replay after reconfiguration. Stdio
+MCP tests enumerate all twelve tools, dispatch the five proposal tools in read-only
+mode, and retain manual/image/highlight coverage. No test connects to a real Force.
+
+Desktop+MCP compilation/Clippy and the Rust 1.88 checks do **not** establish live
+rendering or device-input correctness. Hands-on approval/stop/fullscreen feedback,
+fit/pan/rotation appearance, actual Force gesture effects, cancellation on real
+network failures, native macOS behavior and broader hardware/software coverage
+remain unverified. Phase-1 live teaching evidence above is not phase-2 acceptance.
 
 ## Phase 3: audio inspection
 
@@ -274,7 +347,7 @@ and MCP tests without GUI/audio hardware; compile and lint desktop integration.
 No automated test may connect to a real Force without explicit authorization.
 Record actual GUI/Force smoke-test evidence separately from compilation.
 
-## Running phase 1
+## Running the teacher
 
 Install Poppler (`pdftotext` and, for diagrams, `pdftoppm`). Build:
 
@@ -311,13 +384,13 @@ same-user stale socket may be removed. `mpc-mcp --help` does not import the PDF.
 ### Pi configuration
 
 Pi reads project servers from `.pi/mcp.json` after project trust is granted, or
-user-level servers from `~/.pi/agent/mcp.json`. For this six-tool server, use
-`"exposure": "direct"` so screenshots and highlights are available without tool
-search. From the project root, after building the binaries:
+user-level servers from `~/.pi/agent/mcp.json`. For this twelve-tool server, use
+`"exposure": "direct"` so screenshots, highlights and proposal tools are available
+without tool search. Direct exposure does not grant device control. From the project root, after building the binaries:
 
 ```sh
 pi mcp add --local force-teacher --exposure direct --cwd "$PWD" \
-  --description 'Read-only Force teacher: screen observations, cited manual pages and local highlights; no device input or audio tools.' \
+  --description 'Default read-only Force teacher: cited manual, screen observations/highlights; assisted gestures require a local lease and approval every time. No audio tools.' \
   -- "$PWD/target/release/mpc-mcp" \
   --manual "$PWD/manuals/Force - User Guide - v3.10.1.pdf"
 ```
@@ -328,7 +401,7 @@ release binary or put a shell command string in the `command` field.
 
 Start Pi in this project and approve project trust if prompted, or use `/trust`
 to grant it deliberately. After adding/changing the configuration, use `/reload`
-or restart Pi. `/mcp` should list `force-teacher` and its six tools; after the
+or restart Pi. `/mcp` should list `force-teacher` and its twelve tools; after the
 project is trusted, `pi mcp list` also validates the connection. An untrusted
 project's `.pi/mcp.json` is intentionally ignored. No device password belongs in
 this config, and starting the MCP executable does not enable viewer sharing.

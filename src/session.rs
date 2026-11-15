@@ -18,6 +18,7 @@ use zeroize::Zeroizing;
 use crate::{
     audio::Audio,
     auth::Credentials,
+    control::Controller,
     framebuffer::{DEFAULT_FRAME_PIXEL_BUDGET, Framebuffer},
     protocol::{
         self, Assembler, AuthResult, DeviceInfo, FrameUpdate, Hello, InputEvent, Kind, Message,
@@ -163,6 +164,7 @@ pub enum Command {
 
 pub struct Session {
     snapshot: Arc<Mutex<Snapshot>>,
+    control: Arc<Controller>,
     audio: Arc<Audio>,
     commands: SyncSender<Command>,
     cancel: Arc<AtomicBool>,
@@ -176,6 +178,8 @@ impl Session {
         let state = snapshot.clone();
         let audio = Arc::new(Audio::default());
         let sink = audio.clone();
+        let control = Arc::new(Controller::default());
+        let input_control = control.clone();
         let stop = cancel.clone();
         let worker = thread::Builder::new()
             .name("remote-screen-session".into())
@@ -190,11 +194,13 @@ impl Session {
                     state,
                     stop,
                     commands: receiver,
+                    control: input_control,
                 };
                 worker.run();
             })?;
         Ok(Self {
             snapshot,
+            control,
             audio,
             commands,
             cancel,
@@ -203,6 +209,10 @@ impl Session {
     }
     pub fn audio(&self) -> Arc<Audio> {
         self.audio.clone()
+    }
+    /// Shared input arbitration; granting/approving is local UI only.
+    pub fn control(&self) -> Arc<Controller> {
+        self.control.clone()
     }
     /// Shared latest state for read-only background consumers (recording/teacher).
     pub fn snapshot_source(&self) -> Arc<Mutex<Snapshot>> {
@@ -220,6 +230,7 @@ impl Session {
     }
     /// Signal cancellation immediately; join/drop may then run off the UI thread.
     pub fn request_stop(&self) {
+        self.control.revoke("Session stopped locally");
         self.cancel.store(true, Ordering::Release);
         self.audio.set_enabled(false);
     }
@@ -252,6 +263,7 @@ struct Worker {
     audio_on: bool,
     statistics_clock: Instant,
     streaming_since: Option<Instant>,
+    control: Arc<Controller>,
 }
 impl Worker {
     fn cancelled(&self) -> bool {
@@ -337,6 +349,7 @@ impl Worker {
         snapshot.revision = snapshot.revision.wrapping_add(1);
     }
     fn attempt(&mut self) -> Result<(), SessionError> {
+        self.control.disconnected();
         let addresses = resolve(
             &self.config.host,
             self.config.port,
@@ -394,10 +407,22 @@ impl Worker {
         let mut last_message = clock;
         let mut last_ping = clock;
         let mut ping_token = None;
+        let mut running = None;
+        let mut input_caps = self
+            .state
+            .lock()
+            .unwrap()
+            .screen
+            .as_ref()
+            .map_or(0, |s| s.input_capabilities);
         let result = (|| {
             while !self.cancelled() {
                 // Bound command work per iteration so incoming ACKs/liveness cannot starve.
                 for _ in 0..128 {
+                    self.control
+                        .drive(&mut running, &image, input_caps, |events| {
+                            send_input(&mut wire, events)
+                        })?;
                     match self.commands.try_recv() {
                         Ok(Command::Refresh) => {
                             wire.send(Message::new(Kind::RequestFullRefresh, []))?
@@ -433,8 +458,17 @@ impl Worker {
                                         _ => false,
                                     })
                                     .collect();
-                                for message in InputEvent::messages(&events)? {
-                                    wire.send(message)?;
+                                if !events.is_empty() {
+                                    // Cancel/release the entire agent gesture BEFORE local input.
+                                    self.control.local_input(&events);
+                                    self.control.drive(
+                                        &mut running,
+                                        &image,
+                                        input_caps,
+                                        |events| send_input(&mut wire, events),
+                                    )?;
+                                    send_input(&mut wire, &events)?;
+                                    self.control.local_written();
                                 }
                             }
                         }
@@ -459,6 +493,12 @@ impl Worker {
                 last_message = Instant::now();
                 match message.kind {
                     Kind::ServerInit => {
+                        self.control.revoke("Screen reconfigured");
+                        self.control
+                            .drive(&mut running, &image, input_caps, |events| {
+                                send_input(&mut wire, events)
+                            })?;
+                        self.control.disconnected();
                         // Reconfiguration invalidates every held input and queued old-screen command.
                         for message in InputEvent::messages(&[InputEvent::RELEASE_ALL]).unwrap() {
                             wire.send(message)?;
@@ -469,6 +509,7 @@ impl Worker {
                         self.audio.set_enabled(false);
                         self.audio.reset();
                         audio_available = init.audio_available;
+                        input_caps = init.input_capabilities;
                         image = self.configure(init)?;
                         self.audio.set_enabled(self.audio_on && audio_available);
                         if self.audio_on && audio_available {
@@ -487,7 +528,16 @@ impl Worker {
                                         .apply_unless(&frame, || self.cancelled())
                                         .ok_or(SessionError::Cancelled)?;
                                 }
-                                Err(std::sync::TryLockError::WouldBlock) => thread::sleep(POLL),
+                                Err(std::sync::TryLockError::WouldBlock) => {
+                                    // A framebuffer reader must not prevent gesture deadlines/releases.
+                                    self.control.drive(
+                                        &mut running,
+                                        &image,
+                                        input_caps,
+                                        |events| send_input(&mut wire, events),
+                                    )?;
+                                    thread::sleep(POLL);
+                                }
                                 Err(std::sync::TryLockError::Poisoned(_)) => {
                                     return Err(SessionError::Local(
                                         "Framebuffer lock failed".into(),
@@ -549,6 +599,8 @@ impl Worker {
             }
             Ok(())
         })();
+        drop(running); // Interrupted writes remain explicitly uncertain, never retried.
+        self.control.disconnected();
         self.audio.set_enabled(false);
         if self.audio_on && audio_available && self.cancelled() {
             let _ = wire.send(protocol::audio_control(false));
@@ -560,8 +612,8 @@ impl Worker {
             .screen
             .as_ref()
             .map_or(0, |screen| screen.input_capabilities);
-        if self.cancelled() && input_capabilities != 0 {
-            // Best effort while the socket is still usable, before it is dropped.
+        if input_capabilities != 0 {
+            // Best effort on every exit, not an input acknowledgement or a retry.
             let _ = wire.send(
                 InputEvent::messages(&[InputEvent::RELEASE_ALL])
                     .unwrap()
@@ -618,6 +670,12 @@ impl Worker {
         }
         Err(SessionError::Cancelled)
     }
+}
+fn send_input(wire: &mut Wire, events: &[InputEvent]) -> Result<(), SessionError> {
+    for message in InputEvent::messages(events)? {
+        wire.send(message)?;
+    }
+    Ok(())
 }
 struct Wire {
     stream: TcpStream,

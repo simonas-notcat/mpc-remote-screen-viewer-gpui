@@ -1,6 +1,9 @@
 use hmac::{Hmac, Mac};
 use mpc_remote_screen_viewer_gpui::{auth::Credentials, protocol::*, session::*};
 use sha2::Sha256;
+#[cfg(unix)]
+#[path = "support/assisted.rs"]
+mod assisted;
 use std::{
     io::{Read, Write},
     net::{TcpListener as SystemListener, TcpStream},

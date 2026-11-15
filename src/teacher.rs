@@ -1,11 +1,12 @@
-//! Read-only device observations and local teaching feedback. No remote commands.
-//! The optional Unix bridge is explicitly enabled by the viewer, never implicitly.
+//! Device observations, local teaching feedback and locally approved assisted input.
+//! The bridge defaults to read-only; IPC cannot grant leases or approve gestures.
 mod ipc;
 pub use ipc::{Bridge, default_socket_path, request};
 
 use crate::{
+    control::{Controller, Gesture, Point},
     framebuffer::Framebuffer,
-    session::{Snapshot, State},
+    session::{Session, Snapshot, State},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -43,7 +44,7 @@ impl Rect {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     GetState,
@@ -58,6 +59,11 @@ pub enum Request {
         duration_ms: Option<u64>,
     },
     ClearHighlight,
+    Propose {
+        observation_id: String,
+        gesture: Gesture,
+    },
+    Cancel,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -88,9 +94,11 @@ struct Observation {
     region: Rect,
     image_width: u32,
     image_height: u32,
+    control_epoch: Option<u64>,
 }
 struct Inner {
     source: Option<SnapshotSource>,
+    control: Option<Arc<Controller>>,
     generation: u64,
     next_id: u64,
     observations: VecDeque<Observation>,
@@ -109,6 +117,7 @@ impl Teacher {
             nonce: nonce.iter().map(|b| format!("{b:02x}")).collect(),
             inner: Mutex::new(Inner {
                 source: None,
+                control: None,
                 generation: 0,
                 next_id: 0,
                 observations: VecDeque::new(),
@@ -116,13 +125,24 @@ impl Teacher {
             }),
         })
     }
-    /// Replace/clear the source before detaching a Session. This never controls it.
+    /// Replace/clear the source before detaching a Session; revoke any attached lease.
     pub fn set_source(&self, source: Option<SnapshotSource>) {
         let mut inner = self.inner.lock().unwrap();
+        if let Some(control) = inner.control.take() {
+            control.revoke("AI teacher sharing revoked or source replaced");
+        }
         inner.source = source;
         inner.generation = inner.generation.wrapping_add(1);
         inner.observations.clear();
         inner.highlight = None;
+    }
+    /// Attach input arbitration, still read-only until a LOCAL lease/approval.
+    pub fn set_session(&self, session: &Session) {
+        self.set_source(Some(session.snapshot_source()));
+        self.inner.lock().unwrap().control = Some(session.control());
+    }
+    pub fn control(&self) -> Option<Arc<Controller>> {
+        self.inner.lock().unwrap().control.clone()
     }
     pub fn handle(&self, request: Request) -> Result<Reply, String> {
         match request {
@@ -136,6 +156,15 @@ impl Teacher {
             } => self
                 .highlight(&observation_id, bounds, label, duration_ms)
                 .map(Reply::data),
+            Request::Propose {
+                observation_id,
+                gesture,
+            } => self.propose(&observation_id, gesture).map(Reply::data),
+            Request::Cancel => {
+                let control = self.control().ok_or("No assisted-input session")?;
+                control.cancel();
+                Ok(Reply::data(control.state()))
+            }
             Request::ClearHighlight => {
                 self.inner.lock().unwrap().highlight = None;
                 Ok(Reply::data(
@@ -155,7 +184,10 @@ impl Teacher {
         ))
     }
     pub fn state(&self) -> Result<Value, String> {
-        let source = self.inner.lock().unwrap().source.clone();
+        let (source, control) = {
+            let inner = self.inner.lock().unwrap();
+            (inner.source.clone(), inner.control.clone())
+        };
         let snapshot = match source {
             Some(source) => source
                 .try_lock()
@@ -173,7 +205,8 @@ impl Teacher {
         });
         Ok(json!({
             "viewer_available": true,
-            "read_only": true,
+            "read_only": !control.as_ref().is_some_and(|c| c.status().lease_active),
+            "assisted_control": control.map(|c| c.state()),
             "state": format!("{:?}", snapshot.state),
             "error": snapshot.error,
             "protocol_version": snapshot.protocol_version,
@@ -203,6 +236,7 @@ impl Teacher {
             return Err(format!("max_size must be in 64..={MAX_IMAGE_SIZE}"));
         }
         let (generation, source) = self.source()?;
+        let control_epoch = self.control().map(|c| c.epoch());
         let screen = streaming_screen(&source)?;
         let observed_at = Instant::now();
         // Only the bounded pixel copy holds the live lock. Rotate/resize/PNG off-lock.
@@ -285,6 +319,7 @@ impl Teacher {
             region,
             image_width: iw,
             image_height: ih,
+            control_epoch,
         });
         drop(inner);
         Ok(Reply::Ok {
@@ -301,6 +336,74 @@ impl Teacher {
             }),
             image: Some(STANDARD.encode(png.into_inner())),
         })
+    }
+    fn propose(&self, id: &str, gesture: Gesture) -> Result<Value, String> {
+        let inner = self.inner.lock().unwrap();
+        let observation = inner
+            .observations
+            .iter()
+            .find(|o| o.id == id)
+            .ok_or("Unknown observation; capture a fresh screen")?;
+        if !observation_valid(&inner, observation)? {
+            return Err("Expired or changed device observation; capture a fresh screen".into());
+        }
+        let control = inner
+            .control
+            .as_ref()
+            .ok_or("Read-only source; assisted input is unavailable")?;
+        let epoch = observation
+            .control_epoch
+            .ok_or("Capture a fresh screen after attaching input control")?;
+        let screen = observation
+            .screen
+            .upgrade()
+            .ok_or("Device source disappeared")?;
+        let source = inner.source.as_ref().ok_or("No device session")?;
+        let snapshot = source
+            .try_lock()
+            .map_err(|_| "Device state busy; retry observation (not mutation)")?;
+        let init = snapshot.screen.as_ref().ok_or("No screen configuration")?;
+        let map = |p: Point| -> Result<Point, String> {
+            if p.x >= observation.image_width || p.y >= observation.image_height {
+                return Err("Target is outside the returned screenshot".into());
+            }
+            Ok(Point {
+                x: observation.region.x
+                    + (u64::from(p.x) * u64::from(observation.region.width)
+                        / u64::from(observation.image_width)) as u32,
+                y: observation.region.y
+                    + (u64::from(p.y) * u64::from(observation.region.height)
+                        / u64::from(observation.image_height)) as u32,
+            })
+        };
+        let gesture = match gesture {
+            Gesture::Click { target, hold_ms } => Gesture::Click {
+                target: map(target)?,
+                hold_ms,
+            },
+            Gesture::Drag {
+                start,
+                end,
+                duration_ms,
+            } => Gesture::Drag {
+                start: map(start)?,
+                end: map(end)?,
+                duration_ms,
+            },
+            Gesture::Scroll { target, amount } => Gesture::Scroll {
+                target: map(target)?,
+                amount,
+            },
+            gesture => gesture,
+        };
+        control.propose(
+            &screen,
+            init.input_capabilities,
+            init.upright_size(),
+            gesture,
+            epoch,
+            observation.created + OBSERVATION_TTL,
+        )
     }
     fn highlight(
         &self,
@@ -600,6 +703,108 @@ pub(crate) mod tests {
                 })
                 .is_err()
         );
+    }
+    #[test]
+    fn assisted_targets_map_crop_resize_upright_and_consume_observations() {
+        for rotation in 0..4 {
+            let teacher = Teacher::new().unwrap();
+            let source = source(rotation);
+            let frame = source.lock().unwrap().framebuffer.clone().unwrap();
+            let control = Arc::new(Controller::default());
+            teacher.set_source(Some(source.clone()));
+            teacher.inner.lock().unwrap().control = Some(control.clone());
+            let (data, _) = capture(
+                &teacher,
+                Some(Rect {
+                    x: 10,
+                    y: 10,
+                    width: 80,
+                    height: 60,
+                }),
+                Some(64),
+            );
+            let id = data["observation_id"].as_str().unwrap();
+            assert!(
+                teacher
+                    .propose(
+                        id,
+                        Gesture::Click {
+                            target: Point { x: 32, y: 24 },
+                            hold_ms: 100
+                        }
+                    )
+                    .is_err()
+            );
+            control.grant(&frame).unwrap();
+            assert!(
+                teacher
+                    .propose(
+                        id,
+                        Gesture::Click {
+                            target: Point { x: 64, y: 0 },
+                            hold_ms: 100
+                        }
+                    )
+                    .is_err()
+            );
+            let result = teacher
+                .propose(
+                    id,
+                    Gesture::Click {
+                        target: Point { x: 32, y: 24 },
+                        hold_ms: 100,
+                    },
+                )
+                .unwrap();
+            assert_eq!(result["action"]["position"], json!({"x": 50, "y": 40}));
+            assert_eq!(result["action"]["phase"], "pending_approval");
+            assert!(
+                teacher
+                    .propose(
+                        id,
+                        Gesture::Click {
+                            target: Point { x: 32, y: 24 },
+                            hold_ms: 100
+                        }
+                    )
+                    .is_err()
+            );
+            teacher.handle(Request::Cancel).unwrap();
+            assert!(
+                teacher
+                    .propose(
+                        id,
+                        Gesture::PressKey {
+                            key: "a".into(),
+                            modifiers: [false; 4]
+                        }
+                    )
+                    .is_err()
+            );
+            let (fresh, _) = capture(&teacher, None, None);
+            source.lock().unwrap().state = State::RetryWait;
+            assert!(
+                teacher
+                    .propose(
+                        fresh["observation_id"].as_str().unwrap(),
+                        Gesture::TypeText { text: "abc".into() }
+                    )
+                    .is_err()
+            );
+            teacher.set_source(None);
+            assert!(!control.status().lease_active);
+        }
+    }
+    #[test]
+    fn ipc_cannot_grant_approve_or_assert_confirmation() {
+        for request in [
+            json!({"op": "grant"}),
+            json!({"op": "approve", "id": 1}),
+            json!({"op": "propose", "observation_id": "id", "gesture": {"kind": "click", "target": {"x": 1, "y": 1}, "hold_ms": 100}, "confirmed": true}),
+            json!({"op": "propose", "observation_id": "id", "gesture": {"kind": "click", "target": {"x": 1, "y": 1}, "hold_ms": 100, "confirmed": true}}),
+        ] {
+            assert!(serde_json::from_value::<Request>(request).is_err());
+        }
     }
     #[test]
     fn observation_cache_ttl_and_arguments_are_bounded() {
