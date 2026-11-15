@@ -304,8 +304,8 @@ retried; broken connections cannot guarantee release. No blind sequences.
 
 Human/agent arbitration covers the whole held gesture and in-flight local writes.
 Viewer input revokes/cancels agent ownership and writes release before local input.
-Sharing revocation, local Stop/F12, window deactivation, settings, lease expiry,
-disconnect/reconnect and reconfiguration revoke assisted control. Approval/reject/
+Sharing revocation, local Stop/F12, window deactivation, opening Settings, lease
+expiry, disconnect/reconnect and reconfiguration revoke assisted control. Approval/reject/
 Stop remain available in fullscreen; painting never intercepts input. Local feedback
 shows pending/queued/running/completed/rejected/cancelled/uncertain states, actual
 held/cursor/path/release, signed wheel amount and non-sensitive key/text labels.
@@ -373,8 +373,12 @@ Use a centered connection card while disconnected and a responsive single toolba
 while connected. Provide labeled address/password/port fields, masked password
 with show/hide, recent devices, clear attempt status and cancellation. Hide
 editable credentials during an attempt/session. Capture actions move into overflow
-at small widths instead of wrapping. Settings has General, Audio and Streaming
-tabs, releases remote input, confines focus and closes with Escape.
+at small widths instead of wrapping. Settings has General, Audio, Streaming and
+AI Teacher tabs; its tab buttons wrap in narrow dialogs. Opening Settings releases
+remote input and revokes assisted control; it confines focus and closes with Escape.
+The AI Teacher tab explicitly enables sharing and grants/revokes a timed lease via
+local switches, never saved or auto-renewed. Per-gesture approval is still required
+after closing Settings; an active lease can always be switched off.
 
 Preferences are app-scoped JSON under `mpc-remote-screen-viewer-rs/` in macOS
 Application Support or Linux `$XDG_CONFIG_HOME` (fallback `~/.config`). This legacy

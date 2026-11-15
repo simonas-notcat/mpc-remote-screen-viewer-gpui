@@ -139,12 +139,15 @@ content requested by your agent may reach its configured model. The enabled sock
 is accessible to other processes running as your OS user, not just a particular
 agent. Device credentials and serial numbers are not exported.
 
-For assisted input, use **Allow assisted proposals · 60 s**, then approve or reject
-each immutable proposal in the local teacher panel. **Stop / take over** revokes the
-lease and requests release; these controls also remain available in fullscreen.
-Local viewer input takes over only after agent release. Screen changes, disconnect,
-window deactivation and settings revoke the lease. Physical-device takeover cannot
-be detected. Cursor/held-ring/drag-path/scroll feedback reflects worker writes, not
+Open **Settings → AI Teacher**, enable **AI teacher sharing**, then switch on
+**Allow assisted proposals · 60 s**. Close Settings to review and approve or reject
+each immutable proposal in the local teacher panel. The switch grants a fresh,
+non-persisted 60-second lease, not automatic approval; it turns off on expiry or
+revocation. The floating panel also retains its quick-enable button.
+**Stop / take over** revokes the lease and requests release; these controls also
+remain available in fullscreen. Local viewer input takes over only after agent
+release. Screen changes, disconnect, window deactivation and opening Settings
+revoke the lease. Physical-device takeover cannot be detected. Cursor/held-ring/drag-path/scroll feedback reflects worker writes, not
 model intentions. A socket write is **not** visual verification: poll state, then
 inspect a fresh screen after every gesture. Never automatically retry uncertain
 input. Text is limited to 64 printable ASCII characters; do not send secrets.
@@ -205,10 +208,11 @@ As an additional decoding safeguard, an update has a default aggregate budget of
 exhausted, its remaining rectangles are skipped; its valid prefix is retained and
 the update is still ACKed. Library callers can set `Config::frame_pixel_budget`.
 
-**… → Settings…** (Command-comma) opens one modal dialog with **General**, **Audio**
-and **Streaming** tabs. Volume, live input/output levels, output-device selection
-and target buffering live in Audio; sample rate and output buffer are under
-**Advanced output options**. Changes save immediately. Dialogs release held remote
+**… → Settings…** (Command-comma) opens one modal dialog with **General**, **Audio**,
+**Streaming** and **AI Teacher** tabs. Volume, live input/output levels, output-device
+selection and target buffering live in Audio; sample rate and output buffer are under
+**Advanced output options**. Preferences save immediately; AI-teacher sharing and
+control permissions are session-only and never saved. Dialogs release held remote
 input and keep field editing separate from device keyboard forwarding. Escape
 closes the dialog. Notifications overlay the workspace instead of resizing it.
 

@@ -11,7 +11,7 @@ provides build instructions and user-facing workflows.
 | Protocol/authentication | Bounded protocol-v2 framing and all 16 message types; PBKDF2/HMAC proofs, OS nonces and constant-time server-proof checking. Synthetic fixtures and fragmented/coalesced-message tests. |
 | Session | Background socket worker, serialized writes, bounded commands, cancellable connection/retry, typed terminal failures, exponential jittered network backoff, deadlines, liveness, ACKs, options and metadata. Loopback-tested. |
 | Screen | Raw/LZ4/Zstd/solid/JPEG decoding, persistent delta composition, pixel conversion/quantization, four upright rotations, safe reconfiguration, allocation and aggregate decode budgets. |
-| GPUI workspace | Connection card, responsive toolbar, modal General/Audio/Streaming settings, status/notifications, fit/actual size, pan, fullscreen, native menu/dialog integration and background PNG captures. User-reported testing succeeded on macOS and Omarchy Linux; detailed V1 interaction checks remain open. |
+| GPUI workspace | Connection card, responsive toolbar, modal General/Audio/Streaming/AI Teacher settings, status/notifications, fit/actual size, pan, fullscreen, native menu/dialog integration and background PNG captures. User-reported testing succeeded on macOS and Omarchy Linux; detailed V1 interaction checks remain open. |
 | Remote control | Capability-gated mouse/wheel, touch-only single-contact emulation, US/Linux key mappings, modifiers, synthesized Shift, local shortcut precedence and release-all safety. Core/loopback tests plus user-reported device smoke test; broader K1 checks remain. |
 | Device audio | PCM16, IMA ADPCM and predictive/Rice decoding; source-index queue/markers, cubic resampling, drift correction, prefill/fades/trims. Lazy CPAL device/rate/buffer selection, saved settings, square-law volume and peak meters. A1/A2 hardware checks remain. |
 | Audio analyzer | Spectrum, 2D spectrogram, projected waterfall, peak-preserving waveform, optional stereo density cloud and source peak/RMS meters. Bounded best-effort worker and source-time histories; display settings persist. |
@@ -92,9 +92,14 @@ wire construction; the session worker alone executes/schedules steps and records
 successful socket writes. Approval/queue expiry is 20 seconds, execution at most
 5 seconds (capped by lease expiry); completion/cancellation releases held input.
 Failed writes are uncertain and never replayed. Local input releases/cancels agent
-ownership first; held local inputs block agent ownership. Revocation, settings,
-window deactivation, F12, disconnect and reconfiguration revoke assisted control.
+ownership first; held local inputs block agent ownership. Revocation, opening
+Settings, window deactivation, F12, disconnect and reconfiguration revoke assisted control.
 All pre-action and in-action observations are consumed for subsequent proposals.
+Settings → AI Teacher exposes session-only sharing and timed assisted-proposals
+switches, with explicit unavailable reasons and live lease state. The control switch
+and floating quick-enable share the same local grant/revoke logic; neither approves
+input or auto-renews. Close Settings to approve a proposal; turning off remains
+available with a pending gesture. The tab bar wraps for narrow dialogs.
 The normal/fullscreen panel provides approval/rejection/Stop. Non-interactive agent
 cursor, held ring, actual drag path, signed scroll feedback and hidden-content
 keyboard labels remain outside captures/recordings and below modal UI.

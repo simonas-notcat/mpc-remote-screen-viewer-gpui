@@ -245,9 +245,13 @@ observation's crop/resize into upright protocol coordinates (never inverse-rotat
 
 ### Local authorization and lifecycle
 
-1. Enable the bridge as before. In the viewer's persistent teacher panel, choose
-   **Allow assisted proposals · 60 s**. This grants only a non-persisted, source-bound
-   lease; it does not approve any input. Release any local held inputs first.
+1. Open **Settings → AI Teacher**. Enable **AI teacher sharing**, then switch on
+   **Allow assisted proposals · 60 s**. Close Settings to review/approve proposals
+   in the teacher panel. The panel's quick-enable button is an alternative. Both
+   controls use the same local grant/revoke logic and reflect the live lease, not a
+   saved preference: the switch turns off on expiry/revocation and never auto-renews.
+   Sharing must be enabled and a supported device must be streaming; release local
+   held inputs first. This grants only a source-bound lease, not approval of input.
 2. Inspect a new screen and propose **one** gesture. The tool returns
    `pending_approval`, `queued: false`, and `device_input_sent: false`. It never
    waits for approval or automatically executes/retries the proposal.
@@ -280,9 +284,9 @@ constructors. The session worker alone owns the socket and runs gestures. It
 rechecks source/capabilities before input and releases/cancels the agent gesture
 **before** sending local viewer input. Local down/up/modifier ownership covers the
 whole held gesture, including in-flight writes. Lease expiry, local Stop, F12
-(takeover), window deactivation, settings, sharing revocation, disconnect, reconnect
-and screen reconfiguration revoke assisted control; it is never replayed on a new
-source. Device-side physical takeover cannot be reliably detected.
+(takeover), window deactivation, opening Settings, sharing revocation, disconnect,
+reconnect and screen reconfiguration revoke assisted control; it is never replayed
+on a new source. Device-side physical takeover cannot be reliably detected.
 
 The panel, approval/reject buttons and **Stop / take over** are available in normal
 and fullscreen views. Agent cursor/crosshair, held ring, actual traversed drag path,
@@ -292,14 +296,24 @@ Pending/queued feedback is amber, running cyan, completed green and rejected/
 cancelled/uncertain red; terminal graphics expire/fade. Raw captures and recordings
 remain overlay-free. Disabling sharing clears guidance and requests release.
 
+The **AI Teacher** Settings tab provides explicit sharing and timed control switches,
+including explanations when control is unavailable. Turning the control switch off
+remains possible while a lease is active, including pending gestures. Opening
+Settings revokes the previous lease; explicitly switching on grants a new one while in the
+modal. Close the modal and keep the viewer focused to approve proposals. No input
+is approved by opening/closing Settings or rendering the switches.
+
 ### Phase-2 validation and remaining checks
 
 Automated synthetic/loopback tests cover read-only defaults, exact local approval,
 all five gesture encodings, cancellation during framebuffer contention, local
 human takeover/release ordering, source/capability rechecks, deadlines, consumed
 observations, crop/resize/all-rotation mapping, bounded paths/text, hidden text,
-failed-write uncertainty, revocation, and no replay after reconfiguration. Stdio
-MCP tests enumerate all twelve tools, dispatch the five proposal tools in read-only
+failed-write uncertainty, revocation, and no replay after reconfiguration. Desktop
+unit tests cover the Settings/quick-enable availability gates and live lease/off
+state, including sharing disabled, disconnected/unsupported devices, held local
+input and pending-gesture cancellation. Stdio MCP tests enumerate all twelve tools,
+dispatch the five proposal tools in read-only
 mode, and retain manual/image/highlight coverage. No test connects to a real Force.
 
 Desktop+MCP compilation/Clippy and the Rust 1.88 checks do **not** establish live
@@ -356,7 +370,8 @@ cargo build --locked --release --features desktop,mcp
 ```
 
 Start the viewer with `--teacher`, or enable **View → AI Teacher (read only)**
-(**… → AI teacher (read only)** on Linux).
+(**… → AI teacher (read only)** on Linux), or **Settings → AI Teacher → AI teacher
+sharing**. Sharing/control switches are session-only, not saved preferences.
 Connect to Force through the normal viewer UI. The AI-teacher indicator disables
 sharing immediately when clicked; the option is not persisted across launches.
 
