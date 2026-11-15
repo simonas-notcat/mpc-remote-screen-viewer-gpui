@@ -10,12 +10,13 @@ pub const MAX_FRAMEBUFFER: usize = 64 * 1024 * 1024;
 /// Allows four maximum-sized framebuffer passes per update by default.
 pub const DEFAULT_FRAME_PIXEL_BUDGET: u64 = MAX_FRAMEBUFFER as u64;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Framebuffer {
     init: ServerInit,
     /// Native orientation, tightly packed RGBA, always opaque.
     rgba: Vec<u8>,
     content_revision: u64,
+    content_updated_at: Option<std::time::Instant>,
     frame_pixel_budget: u64,
 }
 #[derive(Debug)]
@@ -41,6 +42,7 @@ impl Framebuffer {
             init,
             rgba,
             content_revision: 0,
+            content_updated_at: None,
             frame_pixel_budget: DEFAULT_FRAME_PIXEL_BUDGET,
         })
     }
@@ -55,6 +57,10 @@ impl Framebuffer {
     /// Changes only when at least one rectangle was successfully composited.
     pub fn content_revision(&self) -> u64 {
         self.content_revision
+    }
+    /// Time of the most recent successfully composited pixels, not UI repaint time.
+    pub fn content_updated_at(&self) -> Option<std::time::Instant> {
+        self.content_updated_at
     }
     pub fn native_rgba(&self) -> &[u8] {
         &self.rgba
@@ -130,6 +136,7 @@ impl Framebuffer {
         }
         if report.dirty.is_some() {
             self.content_revision = self.content_revision.wrapping_add(1);
+            self.content_updated_at = Some(std::time::Instant::now());
         }
         Some(report)
     }

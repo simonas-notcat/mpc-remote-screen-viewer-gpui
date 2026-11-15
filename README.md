@@ -24,6 +24,8 @@ Synthetic test data lives in `tests/fixtures/`.
 - Device Info panel, live FPS/bandwidth and bounded network-rate history graphs.
 - Saved viewer settings and a bounded recent-device picker; passwords are never saved.
 - Saved default screenshot folder with first-use folder selection.
+- Optional stdio MCP read-only Force teacher: local manual search/page images,
+  device observations, and expiring viewer-only guidance highlights.
 - Device audio: PCM16, IMA ADPCM and predictive/Rice decoding, bounded
   playback, cubic rate conversion, drift correction and discontinuity fades.
 - Lazy output-device/rate/buffer selection, saved audio preferences, square-law
@@ -108,6 +110,60 @@ cargo run --locked --example mock_server -- --audio
 Connect and click the speaker button (or launch the viewer with `--audio`). This is a synthetic
 PCM16 test, not evidence of real-device codec/timing correctness. Start with low volume.
 Do not point automated tests at a real MPC without authorization.
+
+## Read-only AI teacher (MCP)
+
+See [`docs/mcp-mpc.md`](docs/mcp-mpc.md) for the architecture, phased plan,
+full tool contracts and MCP-client configuration. Phase 1 exposes **state, screen
+capture, Force manual search/read, and local highlight/clear only**. It cannot
+click, drag, scroll, play audio or change the device. Assisted gestures and their
+visible cursor/path/scroll feedback are planned for phase 2.
+
+Supply `manuals/Force - User Guide - v3.10.1.pdf` locally and install Poppler
+(`pdftotext`; `pdftoppm` for diagram/page images). The manual is indexed in memory;
+no cloud indexing or extracted-manual files are created.
+
+```sh
+cargo build --locked --release --features desktop,mcp
+./target/release/mpc-remote-screen-viewer-gpui --teacher
+# Configure your MCP client to launch this stdio server (use absolute paths):
+./target/release/mpc-mcp --manual '/absolute/path/Force - User Guide - v3.10.1.pdf'
+```
+
+The viewer's bridge is off by default. `--teacher` or **View → AI Teacher (read
+only)** (**… → AI teacher (read only)** on Linux) explicitly enables sharing through
+a private same-user Unix socket on Linux/macOS. Click **AI teacher · read only · ×**
+to disable immediately; fullscreen also has the indicator. Sharing is never restored from preferences. Screen/manual
+content requested by your agent may reach its configured model. The enabled socket
+is accessible to other processes running as your OS user, not just a particular
+agent. Device credentials and serial numbers are not exported.
+
+Highlights have a distinct AI-teacher label, follow fit/pan/rotation, expire within
+10 seconds, and never appear in device screenshots or recordings. Old observations
+cannot annotate a replaced/reconfigured/disconnected device. Manual compatibility
+is explicitly unverified until the agent/user confirms model and software version.
+
+Core/MCP tests use synthetic pixels and manuals, never a real device:
+
+```sh
+cargo test --locked --features mcp
+cargo clippy --locked --features desktop,mcp --all-targets -- -D warnings
+```
+
+For Pi, use the [project-local setup instructions](docs/mcp-mpc.md#pi-configuration)
+with direct tool exposure, then trust the project and reload/restart Pi. Keep the
+manual PDF and machine-specific `.pi/mcp.json` local; both are ignored by Git.
+
+The stdio smoke test exercises actual MCP initialization, all six tools and PDF
+page rendering when Poppler is available (required in the MCP CI job). A subsequent
+live Pi session exercised all six tools; the user confirmed the overlay appeared
+and completed a one-bar techno pattern through guided, user-performed input.
+See [live teaching evidence and limitations](docs/mcp-mpc.md#live-read-only-teaching-smoke-test).
+The agent verified note positions from screenshots; the user identified the sounds.
+Model/firmware metadata was unavailable, and audio analysis was not performed.
+During playback, captures sometimes return `Framebuffer busy; retry`; retry reads
+with a bounded delay. Fullscreen/revocation/reconfiguration and macOS teaching
+behavior still need hands-on coverage.
 
 ## Workspace
 

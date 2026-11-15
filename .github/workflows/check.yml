@@ -19,6 +19,18 @@ jobs:
       - run: cargo test --locked --features audio-output
       - run: cargo clippy --locked --features audio-output --all-targets -- -D warnings
 
+  mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - run: cargo test --locked --features mcp --all-targets
+      - run: cargo clippy --locked --features mcp --all-targets -- -D warnings
+
   msrv:
     runs-on: ubuntu-latest
     steps:
@@ -28,5 +40,6 @@ jobs:
         with:
           key: msrv
       - run: cargo test --locked --no-default-features --all-targets
+      - run: cargo check --locked --features mcp --all-targets
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - run: cargo check --locked --features audio-output --all-targets

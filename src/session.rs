@@ -204,9 +204,13 @@ impl Session {
     pub fn audio(&self) -> Arc<Audio> {
         self.audio.clone()
     }
+    /// Shared latest state for read-only background consumers (recording/teacher).
+    pub fn snapshot_source(&self) -> Arc<Mutex<Snapshot>> {
+        self.snapshot.clone()
+    }
     /// Shared latest state for the background recording capture timer.
     pub fn recording_source(&self) -> Arc<Mutex<Snapshot>> {
-        self.snapshot.clone()
+        self.snapshot_source()
     }
     pub fn snapshot(&self) -> Snapshot {
         self.snapshot.lock().unwrap().clone()

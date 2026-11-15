@@ -6,6 +6,8 @@ pub struct Launch {
     pub port: u16,
     pub password: Zeroizing<String>,
     pub audio: bool,
+    /// Explicit opt-in; never persisted or implied by remote-control preferences.
+    pub teacher: bool,
     pub auto_connect: bool,
     pub help: bool,
     host_supplied: bool,
@@ -23,6 +25,7 @@ impl Launch {
             port: DEFAULT_PORT,
             password: Zeroizing::new(environment_password.unwrap_or_default()),
             audio: false,
+            teacher: false,
             auto_connect: false,
             help: false,
             host_supplied: false,
@@ -50,6 +53,7 @@ impl Launch {
                         Zeroizing::new(args.next().ok_or("--password requires a value")?)
                 }
                 "--audio" => launch.audio = true,
+                "--teacher" => launch.teacher = true,
                 "--help" | "-h" => launch.help = true,
                 _ => return Err("Unknown option; use --help".into()),
             }
@@ -74,7 +78,7 @@ impl Launch {
         }
     }
 }
-pub const HELP: &str = "MPC Remote Screen Viewer GPUI (development build)\n\nUsage: mpc-remote-screen-viewer-gpui [--host HOST] [--port PORT] [--password PASSWORD] [--audio]\n\nPrefer the masked UI or REMOTE_SCREEN_PASSWORD to a command-line password.\n--host auto-connects only with a nonempty password; manual Connect permits empty passwords.\n--audio enables device audio playback when the service advertises audio support.\nUse only on a trusted LAN or through an external VPN; the device protocol has no encryption.";
+pub const HELP: &str = "MPC Remote Screen Viewer GPUI (development build)\n\nUsage: mpc-remote-screen-viewer-gpui [--host HOST] [--port PORT] [--password PASSWORD] [--audio] [--teacher]\n\nPrefer the masked UI or REMOTE_SCREEN_PASSWORD to a command-line password.\n--host auto-connects only with a nonempty password; manual Connect permits empty passwords.\n--audio enables device audio playback when the service advertises audio support.\n--teacher explicitly enables the local read-only AI-teacher bridge; screen data may reach your configured model. Disable it in View or the AI-teacher indicator.\nUse only on a trusted LAN or through an external VPN; the device protocol has no encryption.";
 
 #[cfg(test)]
 mod tests {
@@ -131,6 +135,9 @@ mod tests {
         assert!(!parse(&["--host", "mpc"], None).auto_connect);
         assert!(parse(&["--host", "mpc"], Some("env")).auto_connect);
         assert!(!parse(&[], Some("env")).auto_connect);
+        assert!(!parse(&[], None).teacher);
+        let teacher = parse(&["--teacher"], None);
+        assert!(teacher.teacher && !teacher.auto_connect && !teacher.audio);
         for p in ["0", "65536", "-1", "abc"] {
             assert!(Launch::parse(["--port".into(), p.into()], None).is_err());
         }

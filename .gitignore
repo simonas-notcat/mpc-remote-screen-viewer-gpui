@@ -1,3 +1,7 @@
 .DS_Store
 /target/
 *.app/
+
+# User-supplied reference material and machine-specific MCP launch paths.
+/manuals/*.pdf
+/.pi/mcp.json

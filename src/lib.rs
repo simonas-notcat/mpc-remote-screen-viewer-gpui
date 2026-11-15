@@ -10,6 +10,10 @@ pub mod cli;
 pub mod framebuffer;
 pub mod information;
 pub mod input;
+#[cfg(feature = "mcp")]
+pub mod manual;
+#[cfg(all(feature = "mcp", unix))]
+pub mod mcp;
 pub mod playout;
 pub mod preferences;
 pub mod protocol;
@@ -17,6 +21,8 @@ pub mod recording;
 pub mod session;
 pub mod spectrogram;
 pub mod statistics;
+#[cfg(unix)]
+pub mod teacher;
 pub mod vectorscope;
 pub mod viewport;
 pub mod waveform;
