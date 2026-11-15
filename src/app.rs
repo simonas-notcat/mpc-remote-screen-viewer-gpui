@@ -1,5 +1,6 @@
 //! GPUI workspace and action/controller integration.
 mod analyzer;
+mod teacher;
 pub mod theme;
 mod ui;
 use gpui::{
@@ -25,6 +26,7 @@ use mpc_remote_screen_viewer_gpui::{
     recording::Recorder,
     session::{Command, Config, Session, Snapshot, State},
     statistics::{HISTORY_LIMIT, Sample},
+    teacher::{Bridge as TeacherBridge, Highlight as TeacherHighlight},
     viewport::Picture,
     viewport::Viewport,
 };
@@ -70,6 +72,7 @@ actions!(
         RemoteControl,
         PlayAudio,
         AudioAnalyzer,
+        AiTeacher,
         AudioSettings,
         DeviceInformation,
         Recording,
@@ -127,6 +130,7 @@ pub fn register_actions(cx: &mut App) {
                 MenuItem::action("Remote Control (F12)", RemoteControl),
                 MenuItem::action("Play Device Audio", PlayAudio),
                 MenuItem::action("Audio Analyzer", AudioAnalyzer),
+                MenuItem::action("AI Teacher (read only)", AiTeacher),
                 MenuItem::action("Audio Settings…", AudioSettings),
             ],
         },
@@ -143,6 +147,8 @@ pub struct Viewer {
     session: Option<Session>,
     connection_address: Option<(String, u16)>,
     snapshot: Snapshot,
+    teacher: Option<TeacherBridge>,
+    teacher_highlight: Option<TeacherHighlight>,
     viewer_settings: preferences::ViewerSettings,
     settings_writer: Option<preferences::ViewerSettingsWriter>,
     settings_error: Option<String>,
@@ -287,11 +293,16 @@ impl Viewer {
             let recorder = view.recorder.take();
             let settings_writer = view.settings_writer.take();
             let audio_output = view.audio_output.take();
+            let teacher = view.teacher.take();
+            if let Some(teacher) = &teacher {
+                teacher.request_stop();
+            }
             if let Some(session) = &session {
                 session.audio().set_recording(None);
                 session.request_stop();
             }
             cx.background_executor().spawn(async move {
+                drop(teacher);
                 if let Some(recorder) = recorder
                     && let Err(error) = recorder.finish()
                 {
@@ -402,7 +413,7 @@ impl Viewer {
             .as_ref()
             .err()
             .map(|e| format!("Could not restore analyzer: {e}"));
-        Self {
+        let mut viewer = Self {
             host,
             password,
             port,
@@ -412,6 +423,8 @@ impl Viewer {
             session: None,
             connection_address: None,
             snapshot: Snapshot::default(),
+            teacher: None,
+            teacher_highlight: None,
             settings_writer: writer.ok(),
             settings_error,
             generation: 0,
@@ -457,7 +470,11 @@ impl Viewer {
                 .or(audio_error)
                 .or(output_error)
                 .or(analyzer_error),
+        };
+        if launch.teacher {
+            viewer.toggle_teacher(&AiTeacher, window, cx);
         }
+        viewer
     }
     fn remember_settings(&mut self, cx: &mut Context<Self>) {
         let port = self
@@ -566,6 +583,14 @@ impl Viewer {
                 cx.notify();
             }
         }
+        let highlight = self
+            .teacher
+            .as_ref()
+            .and_then(|bridge| bridge.teacher().overlay());
+        if highlight != self.teacher_highlight {
+            self.teacher_highlight = highlight;
+            cx.notify();
+        }
         let session = self.session.as_ref()?;
         let state = session.snapshot();
         let sink = session.audio();
@@ -653,6 +678,10 @@ impl Viewer {
         }
         self.release_input(cx);
         self.stop_recording(cx);
+        if let Some(teacher) = &self.teacher {
+            teacher.teacher().set_source(None);
+        }
+        self.teacher_highlight = None;
         self.generation = self.generation.wrapping_add(1);
         window.set_window_title("MPC Remote Screen Viewer GPUI");
         self.message = None;
@@ -720,6 +749,11 @@ impl Viewer {
                     session
                         .audio()
                         .set_analyzer(self.analyzer.as_ref().map(|a| a.input.clone()));
+                    if let Some(teacher) = &self.teacher {
+                        teacher
+                            .teacher()
+                            .set_source(Some(session.snapshot_source()));
+                    }
                     self.session = Some(session);
                     self.connection_address = Some(address);
                     self.snapshot.state = State::Connecting;
@@ -1356,6 +1390,7 @@ impl Viewer {
     }
     fn screen(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let image = self.image.clone();
+        let highlight = self.teacher_highlight.clone();
         let size = self
             .snapshot
             .screen
@@ -1463,10 +1498,20 @@ impl Viewer {
                         })
                         .ok()
                     },
-                    move |_, picture, window, _| {
+                    move |canvas_bounds, picture, window, cx| {
                         if let (Some(image), Some(picture)) = (image, picture) {
                             let _ =
                                 window.paint_image(picture, Corners::default(), image, 0, false);
+                            if let Some(highlight) = highlight {
+                                teacher::paint_highlight(
+                                    &highlight,
+                                    picture,
+                                    canvas_bounds,
+                                    size,
+                                    window,
+                                    cx,
+                                );
+                            }
                         }
                     },
                 )
@@ -1536,6 +1581,7 @@ impl Render for Viewer {
             .on_action(cx.listener(Self::play_audio))
             .on_action(cx.listener(Self::audio_settings))
             .on_action(cx.listener(Self::toggle_analyzer))
+            .on_action(cx.listener(Self::toggle_teacher))
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, window, cx| {
                 if event.pressed_button != Some(MouseButton::Left) {
                     view.resizing_analyzer = false;
@@ -1593,6 +1639,16 @@ impl Render for Viewer {
                                 view.exit_fullscreen(&ExitFullscreen, window, cx)
                             })),
                     ),
+                )
+            })
+            .when(fullscreen && self.teacher.is_some(), |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_2()
+                        .left_2()
+                        .occlude()
+                        .child(self.teacher_indicator(cx)),
                 )
             })
             .when(self.analyzer.is_some(), |this| {

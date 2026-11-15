@@ -22,6 +22,8 @@ In scope:
 - Upright PNG captures and Photo-JPEG/PCM16 QuickTime MOV recording.
 - Saved preferences, recent devices, connection/device information and statistics.
 - Cancellable background work, bounded queues and actionable failure messages.
+- Explicit opt-in read-only MCP teacher with local Force manual retrieval, device
+  screenshots and viewer-only highlights; see `docs/mcp-mpc.md`.
 
 Device discovery, cloud accounts, uploads, remote file access, microphone capture,
 audio transmission, a web frontend and a device-side server are outside scope.
@@ -40,6 +42,8 @@ audio transmission, a web frontend and a device-side server are outside scope.
 | `statistics.rs`, `information.rs` | Per-attempt rates/history and read-only device details |
 | `preferences.rs`, `preferences/viewer.rs` | Versioned JSON preferences and bounded recent-device history |
 | `app.rs`, `app/`, `cli.rs`, `main.rs` | GPUI presentation/actions, launch options and application lifecycle |
+| `teacher.rs`, `teacher/ipc.rs` | Read-only observations, expiring local annotations and opt-in same-user Unix IPC |
+| `manual.rs`, `mcp.rs`, `bin/mpc-mcp.rs` | Optional page-preserving manual index and stdio MCP adapter (feature `mcp`) |
 
 One worker owns the TCP socket and serializes all writes with `write_all`.
 Framebuffer deltas are applied in order, while presentation snapshots replace
@@ -411,12 +415,21 @@ real-device A/V sync and failure recovery remain R1 validation items.
 
 ## 11. Launch and packaging
 
-Supported inputs: `--host`, `--port`, `--password`, `--audio`, `--help`/`-h`, and
+Supported inputs: `--host`, `--port`, `--password`, `--audio`, `--teacher`, `--help`/`-h`, and
 `REMOTE_SCREEN_PASSWORD`. Saved values are defaults; explicit CLI address options
 win. `--password` overrides `REMOTE_SCREEN_PASSWORD`. A restored host never
 auto-connects; auto-connect requires explicit nonempty `--host` and nonempty
 password. Help exits without loading settings. Prefer masked UI/environment input
 over CLI passwords, which can appear in process listings/history.
+
+`--teacher` explicitly enables the read-only local teacher bridge; this opt-in is
+never persisted. The View menu and a visible indicator (also in fullscreen) can
+disable sharing. The separate optional `mpc-mcp` executable uses stdio and requires
+an approved Force v3.10.1 PDF via `--manual`; `--socket`/`MPC_TEACHER_SOCKET` select
+local IPC only. No remote input, audio or device changes are exposed in phase 1.
+Highlights reference bounded/expiring upright observations and are local paint,
+not framebuffer modifications. Full security/tool/gesture contracts and later
+phases are in `docs/mcp-mpc.md`.
 
 `scripts/bundle-macos.sh` creates a development `.app` with its own bundle identity,
 Local Network usage explanation and ad-hoc signing. `--universal` builds Apple
@@ -432,8 +445,9 @@ python3 scripts/check-fixtures.py
 cargo fmt --all -- --check
 cargo test --locked --no-default-features
 cargo test --locked --features audio-output
-cargo test --locked --features desktop --all-targets
-cargo clippy --locked --features desktop --all-targets -- -D warnings
+cargo test --locked --features mcp
+cargo test --locked --features desktop,mcp --all-targets
+cargo clippy --locked --features desktop,mcp --all-targets -- -D warnings
 ```
 
 Core tests use synthetic fixtures and their own loopback mock peers. Never point
@@ -444,7 +458,9 @@ Automated coverage includes fragmented/coalesced envelopes, crypto proofs and
 negative authentication, optional extensions, malformed lengths, all screen codecs,
 rotations/quantization, ACKs independent of paints, reconnect/cancel/deadlines,
 input mapping/release safety, audio codec edges, bounded queues/drift/allocation-free
-rendering, preference validation/atomic writes, and PNG/MOV content/timing/errors.
+rendering, preference validation/atomic writes, PNG/MOV content/timing/errors,
+and read-only teacher IPC/observation bounds, manual page retrieval, native MCP
+images and synthetic stdio tool dispatch.
 
 | Check | Current validation gap |
 | --- | --- |
@@ -457,9 +473,15 @@ rendering, preference validation/atomic writes, and PNG/MOV content/timing/error
 | V1 | Detailed macOS/Retina layout, scaling, gestures, minimum sizes, native menus/dialogs and capture UI remain unverified. |
 | C1 | Preference restoration, recent selection, startup precedence and quit/error paths lack detailed macOS interaction validation. |
 | S1 | Inspector/graphs/scrolling/input occlusion lack detailed macOS validation. |
+| T1 | Basic live Pi teaching and user-confirmed highlight visibility succeeded. Fullscreen/revocation/reconfiguration and macOS teacher IPC still need hands-on tests; absent device model/firmware prevents exact manual compatibility confirmation. Playback captures can return `Framebuffer busy; retry`; bounded capture backoff is not automatic. |
 
 User-reported testing has succeeded on macOS and Omarchy Linux. Earlier
 connection, remote-control and screenshot-folder smoke tests also succeeded.
 Device model, firmware, OS versions and per-platform feature coverage were not recorded.
 Keep these reports separate from automated results and independently observed
-hardware validation. See `IMPLEMENTATION.md` for the current development status.
+hardware validation. A subsequent live Pi session exercised read-only teaching
+through a complete one-bar drum pattern, with note positions verified from
+screenshots and drum voices/overlay visibility confirmed by the user. All device
+input was performed by the user; no agent audio analysis occurred. See
+`docs/mcp-mpc.md` for this
+session's evidence and limitations, and `IMPLEMENTATION.md` for development status.

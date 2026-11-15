@@ -445,6 +445,7 @@ impl Viewer {
         let focus = self.focus.clone();
         let stats = self.show_stats;
         let analyzer = self.analyzer.is_some();
+        let teacher = self.teacher.is_some();
         let recording = self.recorder.is_some();
         let recording_pending = self.recording_pending;
         let capture_pending = self.capture_pending;
@@ -478,6 +479,11 @@ impl Viewer {
                             .action(Box::new(Statistics)),
                     )
                     .menu("Device information", Box::new(DeviceInformation))
+                    .item(
+                        PopupMenuItem::new("AI teacher (read only)")
+                            .checked(teacher)
+                            .action(Box::new(AiTeacher)),
+                    )
                     .separator()
                     .item(
                         PopupMenuItem::new("Audio analyzer")
@@ -772,6 +778,9 @@ impl Viewer {
                 this.child(format!("· {w} × {h}"))
             })
             .child(div().flex_1())
+            .when(self.teacher.is_some(), |this| {
+                this.child(self.teacher_indicator(cx))
+            })
             .when(self.recorder.is_some(), |this| {
                 this.child(status_dot(DANGER))
                     .child(format!("REC {}", elapsed_label(self.recording_seconds)))
