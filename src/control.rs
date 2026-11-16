@@ -1,4 +1,4 @@
-//! GUI-independent assisted input. Only local callers can grant a lease/approve.
+//! GUI-independent assisted input. A local global toggle authorizes bounded gestures.
 //! The session worker alone drives plans and reports successful socket writes.
 use crate::{
     framebuffer::Framebuffer,
@@ -17,8 +17,7 @@ use std::{
 };
 
 type Screen = Arc<RwLock<Framebuffer>>;
-pub const LEASE_DURATION: Duration = Duration::from_secs(60);
-const APPROVAL_TIMEOUT: Duration = Duration::from_secs(20);
+const QUEUE_TIMEOUT: Duration = Duration::from_secs(5);
 const EXECUTION_TIMEOUT: Duration = Duration::from_secs(5);
 const FEEDBACK_DURATION: Duration = Duration::from_secs(2);
 
@@ -67,7 +66,6 @@ pub enum Gesture {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
-    PendingApproval,
     Queued,
     Running,
     Completed,
@@ -77,7 +75,7 @@ pub enum Phase {
 }
 impl Phase {
     pub fn active(self) -> bool {
-        matches!(self, Self::PendingApproval | Self::Queued | Self::Running)
+        matches!(self, Self::Queued | Self::Running)
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -105,7 +103,7 @@ pub struct Feedback {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Status {
-    pub lease_active: bool,
+    pub enabled: bool,
     pub human_held: bool,
     pub feedback: Option<Feedback>,
 }
@@ -282,7 +280,7 @@ impl Plan {
         }
         let feedback = Feedback {
             id: 0,
-            phase: Phase::PendingApproval,
+            phase: Phase::Queued,
             summary,
             gesture: kind,
             start,
@@ -315,22 +313,16 @@ fn pointer_kinds(caps: u8) -> Result<(u8, u8, u8), String> {
         Err("Device does not advertise mouse or touch input".into())
     }
 }
-struct Lease {
-    screen: Weak<RwLock<Framebuffer>>,
-    until: Instant,
-    cancelled: Arc<AtomicBool>,
-}
 struct Pending {
     screen: Weak<RwLock<Framebuffer>>,
     plan: Plan,
     until: Instant,
     observation_expires_at: Instant,
-    approved: bool,
     cancelled: Arc<AtomicBool>,
 }
 #[derive(Default)]
 struct Inner {
-    lease: Option<Lease>,
+    enabled: bool,
     pending: Option<Pending>,
     feedback: Option<Feedback>,
     cancellation: Option<Arc<AtomicBool>>,
@@ -340,9 +332,9 @@ struct Inner {
     next_id: u64,
 }
 impl Inner {
-    fn stop(&mut self, reason: &str, revoke: bool) {
-        if revoke && let Some(lease) = self.lease.take() {
-            lease.cancelled.store(true, Ordering::Release);
+    fn stop(&mut self, reason: &str, disable: bool) {
+        if disable {
+            self.enabled = false;
         }
         if let Some(cancel) = &self.cancellation {
             cancel.store(true, Ordering::Release);
@@ -369,18 +361,11 @@ impl Inner {
             feedback.overlay_visible = false;
         }
         if self
-            .lease
-            .as_ref()
-            .is_some_and(|l| l.until <= Instant::now() || l.screen.strong_count() == 0)
-        {
-            self.stop("Control lease expired or source disappeared", true);
-        }
-        if self
             .pending
             .as_ref()
             .is_some_and(|p| p.until <= Instant::now())
         {
-            self.stop("Gesture approval/queue deadline expired", false);
+            self.stop("Gesture queue deadline expired", false);
         }
     }
 }
@@ -389,56 +374,14 @@ pub struct Controller {
     inner: Mutex<Inner>,
 }
 impl Controller {
-    /// LOCAL UI ONLY. This method is intentionally absent from the IPC/MCP enum.
-    pub fn grant(&self, screen: &Screen) -> Result<(), String> {
+    /// LOCAL UI ONLY. No timer, focus dependency, or per-gesture approval.
+    /// Disabling cancels queued/running work and requests worker-owned release.
+    pub fn set_enabled(&self, enabled: bool) {
         let mut inner = self.inner.lock().unwrap();
-        inner.maintain();
-        if inner.local_writing
-            || !inner.human.is_empty()
-            || inner.feedback.as_ref().is_some_and(|f| f.phase.active())
-        {
-            return Err(
-                "Release local inputs / stop the current gesture before granting a lease".into(),
-            );
-        }
-        inner.stop("Lease replaced", true);
-        inner.lease = Some(Lease {
-            screen: Arc::downgrade(screen),
-            until: Instant::now() + LEASE_DURATION,
-            cancelled: Arc::new(AtomicBool::new(false)),
-        });
-        Ok(())
-    }
-    /// LOCAL UI ONLY; approval is bound to the exact, immutable proposal ID.
-    pub fn approve(&self, id: u64) -> Result<(), String> {
-        let mut inner = self.inner.lock().unwrap();
-        inner.maintain();
-        if inner.lease.is_none() {
-            return Err("No local control lease".into());
-        }
-        if inner.local_writing || !inner.human.is_empty() {
-            return Err("Release local inputs first".into());
-        }
-        if !inner
-            .feedback
-            .as_ref()
-            .is_some_and(|f| f.id == id && f.phase == Phase::PendingApproval)
-        {
-            return Err("Proposal changed or expired; nothing approved".into());
-        }
-        inner.pending.as_mut().ok_or("No pending gesture")?.approved = true;
-        inner.feedback.as_mut().unwrap().phase = Phase::Queued;
-        Ok(())
-    }
-    pub fn reject(&self, id: u64) {
-        let mut inner = self.inner.lock().unwrap();
-        if inner
-            .feedback
-            .as_ref()
-            .is_some_and(|f| f.id == id && f.phase == Phase::PendingApproval)
-        {
-            inner.stop("Rejected locally; no input sent", false);
-            inner.feedback.as_mut().unwrap().phase = Phase::Rejected;
+        if enabled {
+            inner.enabled = true;
+        } else {
+            inner.stop("Allow assistance switched off locally", true);
         }
     }
     pub fn revoke(&self, reason: &str) {
@@ -457,7 +400,7 @@ impl Controller {
         let mut inner = self.inner.lock().unwrap();
         inner.maintain();
         Status {
-            lease_active: inner.lease.is_some(),
+            enabled: inner.enabled,
             human_held: inner.local_writing || !inner.human.is_empty(),
             feedback: inner.feedback.clone(),
         }
@@ -465,12 +408,12 @@ impl Controller {
     pub fn state(&self) -> Value {
         let mut inner = self.inner.lock().unwrap();
         inner.maintain();
-        json!({"lease_active": inner.lease.is_some(), "lease_remaining_ms": inner.lease.as_ref().map(|l| l.until.saturating_duration_since(Instant::now()).as_millis() as u64),
-            "approval": "Local approval required for EVERY gesture, including unknown/destructive/record/transport workflows",
+        json!({"enabled": inner.enabled,
+            "authorization": "The local Allow assistance toggle globally authorizes bounded gestures. No timer or per-gesture approval.",
             "action": inner.feedback, "human_input_held": inner.local_writing || !inner.human.is_empty(),
             "visually_verified": false, "note": "Written means socket write only, not device acknowledgement or visual verification. Never retry uncertain mutations. Physical device takeover cannot be detected."})
     }
-    pub fn propose(
+    pub fn submit(
         &self,
         screen: &Screen,
         caps: u8,
@@ -491,16 +434,10 @@ impl Controller {
                     .into(),
             );
         }
-        let lease = inner
-            .lease
-            .as_ref()
-            .ok_or("Read-only mode: grant a control lease locally in the viewer first")?;
-        if !lease
-            .screen
-            .upgrade()
-            .is_some_and(|s| Arc::ptr_eq(&s, screen))
-        {
-            return Err("Lease belongs to another screen; grant a new lease locally".into());
+        if !inner.enabled {
+            return Err(
+                "Read-only mode: turn on Allow assistance in the viewer's main menu first".into(),
+            );
         }
         if inner.local_writing
             || !inner.human.is_empty()
@@ -518,27 +455,26 @@ impl Controller {
         inner.pending = Some(Pending {
             screen: Arc::downgrade(screen),
             plan,
-            until: (Instant::now() + APPROVAL_TIMEOUT).min(observation_expires_at),
+            until: (Instant::now() + QUEUE_TIMEOUT).min(observation_expires_at),
             observation_expires_at,
-            approved: false,
             cancelled: cancel,
         });
         inner.epoch = inner.epoch.wrapping_add(1); // Consumes all pre-proposal observations.
-        let approval_remaining = inner
+        let queue_remaining = inner
             .pending
             .as_ref()
             .unwrap()
             .until
             .saturating_duration_since(Instant::now());
         Ok(
-            json!({"action": inner.feedback, "queued": false, "device_input_sent": false, "approval_expires_in_ms": approval_remaining.as_millis() as u64, "next": "Wait for local approval, poll mpc_get_state, then capture a NEW screen after completion. Do not resubmit this gesture."}),
+            json!({"action": inner.feedback, "queued": true, "device_input_sent": false, "queue_expires_in_ms": queue_remaining.as_millis() as u64, "next": "Gesture queued under global authorization. Poll mpc_get_state, then capture a NEW screen after completion. Do not resubmit this gesture."}),
         )
     }
     pub(crate) fn local_input(&self, events: &[InputEvent]) {
         let mut inner = self.inner.lock().unwrap();
         inner.stop(
             "Local viewer input took over; agent release requested",
-            true,
+            false,
         );
         inner.local_writing = true;
         inner.epoch = inner.epoch.wrapping_add(1);
@@ -574,7 +510,7 @@ impl Controller {
     }
     pub(crate) fn disconnected(&self) {
         let mut inner = self.inner.lock().unwrap();
-        inner.stop("Session disconnected or screen reconfigured", true);
+        inner.stop("Session disconnected or screen reconfigured", false);
         inner.human.clear();
         inner.local_writing = false;
         if let Some(feedback) = &mut inner.feedback {
@@ -594,28 +530,25 @@ impl Controller {
         {
             let mut inner = self.inner.lock().unwrap();
             inner.maintain();
-            if running.is_none() && inner.pending.as_ref().is_some_and(|p| p.approved) {
+            if running.is_none() && inner.pending.is_some() {
                 let pending = inner.pending.take().unwrap();
                 let valid = pending
                     .screen
                     .upgrade()
                     .is_some_and(|s| Arc::ptr_eq(&s, screen))
                     && caps & pending.plan.caps != 0
-                    && inner.lease.is_some()
+                    && inner.enabled
                     && inner.human.is_empty()
                     && !inner.local_writing;
                 if valid {
-                    let lease = inner.lease.as_ref().unwrap();
                     *running = Some(Running {
                         controller: self.clone(),
                         id: pending.plan.feedback.id,
                         plan: pending.plan,
                         screen: Arc::downgrade(screen),
                         cancel: pending.cancelled,
-                        lease_cancel: lease.cancelled.clone(),
                         started: Instant::now(),
                         deadline: (Instant::now() + EXECUTION_TIMEOUT)
-                            .min(lease.until)
                             .min(pending.observation_expires_at),
                         index: 0,
                         attempted: false,
@@ -638,7 +571,6 @@ impl Controller {
             return Ok(());
         };
         let cancelled = run.cancel.load(Ordering::Acquire)
-            || run.lease_cancel.load(Ordering::Acquire)
             || Instant::now() >= run.deadline
             || caps & run.plan.caps == 0
             || !run
@@ -689,7 +621,6 @@ pub(crate) struct Running {
     plan: Plan,
     screen: Weak<RwLock<Framebuffer>>,
     cancel: Arc<AtomicBool>,
-    lease_cancel: Arc<AtomicBool>,
     started: Instant,
     deadline: Instant,
     index: usize,
@@ -721,7 +652,6 @@ impl Drop for Running {
     fn drop(&mut self) {
         if !self.finished {
             self.finish(if self.attempted { Phase::Uncertain } else { Phase::Cancelled }, false, Some("Connection/write failed; input and release may be incomplete. Do NOT retry. Inspect a fresh screen."));
-            self.controller.revoke("Execution interrupted");
         }
     }
 }

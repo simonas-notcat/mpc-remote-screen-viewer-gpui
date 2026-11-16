@@ -210,7 +210,7 @@ impl Session {
     pub fn audio(&self) -> Arc<Audio> {
         self.audio.clone()
     }
-    /// Shared input arbitration; granting/approving is local UI only.
+    /// Shared input arbitration; only the local global toggle enables assistance.
     pub fn control(&self) -> Arc<Controller> {
         self.control.clone()
     }
@@ -493,7 +493,7 @@ impl Worker {
                 last_message = Instant::now();
                 match message.kind {
                     Kind::ServerInit => {
-                        self.control.revoke("Screen reconfigured");
+                        self.control.cancel();
                         self.control
                             .drive(&mut running, &image, input_caps, |events| {
                                 send_input(&mut wire, events)

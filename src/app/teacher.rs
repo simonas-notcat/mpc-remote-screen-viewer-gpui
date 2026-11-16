@@ -1,87 +1,34 @@
-//! Local opt-in, per-gesture approval and non-interactive device-coordinate feedback.
-#[cfg(test)]
-mod tests;
+//! Global assistance toggle and non-interactive device-coordinate feedback.
 use super::*;
 use gpui::{TextRun, fill, outline, rgba, size};
 use gpui_component::{Sizable, button::ButtonVariants};
 use mpc_remote_screen_viewer_gpui::{
-    control::{Feedback, Phase, Status as ControlStatus},
+    control::{Feedback, Phase},
     teacher as core,
     viewport::Picture,
 };
 
-/// Shared by Settings and the quick-enable panel; these are UI gates, not authorization.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) struct AssistedSettings {
-    pub lease_active: bool,
-    pub unavailable: Option<&'static str>,
-}
-impl AssistedSettings {
-    pub fn switch_disabled(&self) -> bool {
-        // OFF must remain available even while a gesture blocks a new grant.
-        !self.lease_active && self.unavailable.is_some()
-    }
-}
-fn assisted_settings(
-    snapshot: &Snapshot,
-    sharing: bool,
-    local_held: bool,
-    control: Option<&ControlStatus>,
-) -> AssistedSettings {
-    let unavailable = if !sharing {
-        Some("Enable AI teacher sharing first.")
-    } else if snapshot.state != State::Streaming || snapshot.framebuffer.is_none() {
-        Some("Connect to a streaming device first.")
-    } else if snapshot
-        .screen
-        .as_ref()
-        .is_none_or(|s| s.input_capabilities & 7 == 0)
-    {
-        Some("The connected device does not advertise supported input capabilities.")
-    } else if control.is_none() {
-        Some("Assisted input is not attached; reconnect the device.")
-    } else if local_held || control.is_some_and(|s| s.human_held) {
-        Some("Release local buttons, touch and modifiers first.")
-    } else if control
-        .and_then(|s| s.feedback.as_ref())
-        .is_some_and(|f| f.phase.active())
-    {
-        Some("Stop the current gesture before granting a new lease.")
-    } else {
-        None
-    };
-    AssistedSettings {
-        lease_active: sharing && control.is_some_and(|s| s.lease_active),
-        unavailable,
-    }
-}
-
 impl Viewer {
-    pub(super) fn assisted_settings(&self) -> AssistedSettings {
-        let control = self
-            .teacher
-            .as_ref()
-            .and_then(|b| b.teacher().control())
-            .map(|c| c.status());
-        assisted_settings(
-            &self.snapshot,
-            self.teacher.is_some(),
-            self.control.is_held(),
-            control.as_ref(),
-        )
+    pub(super) fn toggle_assistance(
+        &mut self,
+        _: &AllowAssistance,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let enabled = !self.assistance_on;
+        // One toggle is sufficient: enabling assistance explicitly opts into sharing too.
+        if enabled && self.teacher.is_none() {
+            self.toggle_teacher(&AiTeacher, window, cx);
+            if self.teacher.is_none() {
+                return;
+            }
+        }
+        self.set_assistance_enabled(enabled, cx);
     }
-    /// Local-only, shared by the Settings switch and floating quick-enable button.
-    pub(super) fn set_assisted_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        if !enabled {
-            self.stop_assisted("Assisted proposals disabled locally");
-        } else if let Some(reason) = self.assisted_settings().unavailable {
-            self.message = Some(reason.into());
-        } else if let (Some(control), Some(screen)) = (
-            self.teacher.as_ref().and_then(|b| b.teacher().control()),
-            self.snapshot.framebuffer.as_ref(),
-        ) && let Err(error) = control.grant(screen)
-        {
-            self.message = Some(error);
+    pub(super) fn set_assistance_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.assistance_on = enabled;
+        if let Some(session) = &self.session {
+            session.control().set_enabled(enabled);
         }
         self.teacher_control = self
             .teacher
@@ -94,6 +41,10 @@ impl Viewer {
         self.teacher_highlight = None;
         self.teacher_control = None;
         if let Some(bridge) = self.teacher.take() {
+            self.assistance_on = false;
+            if let Some(session) = &self.session {
+                session.control().set_enabled(false);
+            }
             bridge.request_stop();
             cx.background_executor()
                 .spawn(async move { drop(bridge) })
@@ -106,7 +57,7 @@ impl Viewer {
                         bridge.teacher().set_session(session);
                     }
                     self.message = Some(format!(
-                        "AI teacher enabled (read only). Screen captures can reach your configured model. Click the AI-teacher indicator to disable. Socket: {}",
+                        "AI teacher sharing enabled. Screen captures can reach your configured model. Allow assistance in the main menu enables device input; the indicator disables sharing. Socket: {}",
                         bridge.path().display()
                     ));
                     self.teacher = Some(bridge);
@@ -121,59 +72,64 @@ impl Viewer {
             .ghost()
             .small()
             .h(px(24.0))
-            .label(
-                if self
-                    .teacher_control
-                    .as_ref()
-                    .is_some_and(|s| s.lease_active)
-                {
-                    "AI teacher · assisted · ×"
-                } else {
-                    "AI teacher · read only · ×"
-                },
-            )
+            .label(if self.assistance_on {
+                "AI assistance · ON · ×"
+            } else {
+                "AI teacher · read only · ×"
+            })
             .tooltip("Disable sharing, revoke agent control and clear teaching overlays")
             .on_click(
                 cx.listener(|view, _, window, cx| view.toggle_teacher(&AiTeacher, window, cx)),
             )
     }
-    pub(super) fn stop_assisted(&self, reason: &str) {
-        if let Some(control) = self.teacher.as_ref().and_then(|b| b.teacher().control()) {
-            control.revoke(reason);
-        }
-    }
     /// This surface is local-only and is also rendered in fullscreen, below modals.
     pub(super) fn teacher_controls(&self, cx: &mut Context<Self>) -> AnyElement {
-        let settings = self.assisted_settings();
-        let status = self.teacher_control.as_ref();
-        let lease = settings.lease_active;
-        let feedback = status.and_then(|s| s.feedback.as_ref());
+        let feedback = self
+            .teacher_control
+            .as_ref()
+            .and_then(|s| s.feedback.as_ref());
         let active = feedback.is_some_and(|f| f.phase.active());
-        let description = feedback.map(|f| format!("AI #{id} · {phase:?} · {summary} · {written}/{total} steps written{held}", id=f.id, phase=f.phase, summary=f.summary, written=f.written_steps, total=f.total_steps, held=if f.held { " · HELD" } else { "" }))
-            .unwrap_or_else(|| "AI teacher · read only. Assisted gestures require a local lease and approval every time.".into());
-        div().absolute().bottom_8().left_2().right_2().occlude()
-            .flex().flex_col().gap_1().p_2().bg(rgba(0x07131bf0)).text_color(rgb(0xa5edff)).text_xs()
-            .child(description)
-            .child(div().flex().flex_wrap().items_center().gap_2()
-                .when(!lease, |row| row.child(Button::new("grant-ai-lease").small().label("Allow assisted proposals · 60 s")
-                    .disabled(settings.unavailable.is_some())
-                    .on_click(cx.listener(|view, _, _, cx| view.set_assisted_enabled(true, cx)))))
-                .when(lease || active, |row| row.child(Button::new("stop-ai-takeover").small().label("Stop / take over")
-                    .on_click(cx.listener(|view, _, _, cx| { view.stop_assisted("Stopped locally / human takeover"); cx.notify(); }))))
-                .when_some(feedback.filter(|f| f.phase == Phase::PendingApproval), |row, feedback| {
-                    let id = feedback.id;
-                    row.child(Button::new("approve-ai-gesture").small().label("Approve this ONE gesture")
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            if let Some(control) = view.teacher.as_ref().and_then(|b| b.teacher().control()) && let Err(error) = control.approve(id) { view.message = Some(error); }
+        let description = feedback.map(|f| format!("AI #{} · {:?} · {} · {}/{} steps written{}", f.id, f.phase, f.summary, f.written_steps, f.total_steps, if f.held { " · HELD" } else { "" }))
+            .unwrap_or_else(|| "Assistance ON · agents can interact without additional approval, including while this window is unfocused.".into());
+        div()
+            .absolute()
+            .bottom_8()
+            .left_2()
+            .right_2()
+            .occlude()
+            .flex()
+            .items_center()
+            .gap_2()
+            .p_2()
+            .bg(rgba(0x07131bf0))
+            .text_color(rgb(0xa5edff))
+            .text_xs()
+            .child(div().flex_1().min_w_0().child(description))
+            .when(active, |row| {
+                row.child(
+                    Button::new("cancel-ai-gesture")
+                        .small()
+                        .label("Cancel gesture")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            if let Some(control) =
+                                view.teacher.as_ref().and_then(|b| b.teacher().control())
+                            {
+                                control.cancel();
+                            }
                             cx.notify();
-                        })))
-                        .child(Button::new("reject-ai-gesture").small().label("Reject")
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                if let Some(control) = view.teacher.as_ref().and_then(|b| b.teacher().control()) { control.reject(id); }
-                                cx.notify();
-                            })))
-                })
-                .child(if lease { "Lease active · all gestures may delete/overwrite/record. Approval is not visual verification." } else { "No agent input without local approval. Physical-device takeover cannot be detected." }))
+                        })),
+                )
+            })
+            .when(self.assistance_on, |row| {
+                row.child(
+                    Button::new("stop-ai-assistance")
+                        .small()
+                        .label("Stop assistance")
+                        .on_click(
+                            cx.listener(|view, _, _, cx| view.set_assistance_enabled(false, cx)),
+                        ),
+                )
+            })
             .into_any_element()
     }
 }
@@ -236,7 +192,7 @@ pub(super) fn paint_feedback(
         return;
     }
     let color = match feedback.phase {
-        Phase::PendingApproval | Phase::Queued => 0xffc45c,
+        Phase::Queued => 0xffc45c,
         Phase::Running => 0x59dcff,
         Phase::Completed => 0x72ffa6,
         Phase::Rejected | Phase::Cancelled | Phase::Uncertain => 0xff7373,

@@ -116,9 +116,9 @@ Do not point automated tests at a real MPC without authorization.
 See [`docs/mcp-mpc.md`](docs/mcp-mpc.md) for the architecture, phased plan,
 full tool contracts and MCP-client configuration. State/screen capture, Force manual
 search/read and local highlights work in read-only mode. Phase 2 adds bounded
-click/long-press, drag, scroll, key and ASCII-text **proposals**, plus cancellation.
-Every gesture needs a **locally granted 60-second lease and separate local approval**;
-neither enabling sharing nor an MCP argument authorizes input. No audio tools exist.
+click/long-press, drag, scroll, key and ASCII-text input, plus cancellation.
+The main-menu **Allow assistance** toggle is global approval: no per-gesture prompts,
+permission timer or focus requirement. It starts off on each app launch. No audio tools exist.
 
 Supply `manuals/Force - User Guide - v3.10.1.pdf` locally and install Poppler
 (`pdftotext`; `pdftoppm` for diagram/page images). The manual is indexed in memory;
@@ -131,26 +131,28 @@ cargo build --locked --release --features desktop,mcp
 ./target/release/mpc-mcp --manual '/absolute/path/Force - User Guide - v3.10.1.pdf'
 ```
 
-The viewer's bridge is off by default. `--teacher` or **View → AI Teacher (read
-only)** (**… → AI teacher (read only)** on Linux) explicitly enables sharing through
-a private same-user Unix socket on Linux/macOS. Click **AI teacher · read only · ×**
+The viewer's bridge is off by default. `--teacher` or **AI teacher sharing** in the
+main menu explicitly enables read-only sharing through a private same-user Unix
+socket on Linux/macOS. Click **AI teacher · read only · ×**
 to disable immediately; fullscreen also has the indicator. Sharing is never restored from preferences. Screen/manual
 content requested by your agent may reach its configured model. The enabled socket
 is accessible to other processes running as your OS user, not just a particular
 agent. Device credentials and serial numbers are not exported.
 
-Open **Settings → AI Teacher**, enable **AI teacher sharing**, then switch on
-**Allow assisted proposals · 60 s**. Close Settings to review and approve or reject
-each immutable proposal in the local teacher panel. The switch grants a fresh,
-non-persisted 60-second lease, not automatic approval; it turns off on expiry or
-revocation. The floating panel also retains its quick-enable button.
-**Stop / take over** revokes the lease and requests release; these controls also
-remain available in fullscreen. Local viewer input takes over only after agent
-release. Screen changes, disconnect, window deactivation and opening Settings
-revoke the lease. Physical-device takeover cannot be detected. Cursor/held-ring/drag-path/scroll feedback reflects worker writes, not
-model intentions. A socket write is **not** visual verification: poll state, then
-inspect a fresh screen after every gesture. Never automatically retry uncertain
-input. Text is limited to 64 printable ASCII characters; do not send secrets.
+For device input, switch on **… → Allow assistance** (Linux) or **View → Allow
+assistance** (native menu). This also enables sharing if needed. While checked,
+agent gestures run directly without further approval—even with the viewer unfocused.
+It stays on through Settings, reconnects and screen changes, until you turn it off,
+disable sharing, or close the app. It is not saved across launches.
+
+Switch it off or press **Stop assistance** to cancel queued/running input and
+request release. **Cancel gesture** / `mpc_cancel` stop only the current action and
+leave global assistance on. Local viewer input takes over after agent release,
+without resetting the toggle. Old gestures never replay after source changes.
+Cursor/held/path/scroll feedback reflects worker writes, not model intentions.
+A socket write is **not** visual verification: inspect a fresh screen after every
+gesture and never automatically retry uncertain input. Text is limited to 64
+printable ASCII characters; do not send secrets. Physical takeover is not detectable.
 
 Highlights have a distinct AI-teacher label, follow fit/pan/rotation, expire within
 10 seconds, and never appear in device screenshots or recordings. Old observations
@@ -169,8 +171,8 @@ with direct tool exposure, then trust the project and reload/restart Pi. Keep th
 manual PDF and machine-specific `.pi/mcp.json` local; both are ignored by Git.
 
 The stdio smoke test exercises MCP initialization, all twelve tool definitions,
-read-only proposal rejection and PDF page rendering when Poppler is available
-(required in the MCP CI job). Loopback tests cover locally approved gesture writes,
+disabled-input rejection and PDF page rendering when Poppler is available
+(required in the MCP CI job). Loopback tests cover globally authorized gesture writes,
 cancellation, takeover and reconfiguration; **phase-2 GUI/Force effects remain
 unverified**. A prior phase-1 live Pi session exercised its six tools; the user confirmed the overlay appeared
 and completed a one-bar techno pattern through guided, user-performed input.
@@ -208,11 +210,11 @@ As an additional decoding safeguard, an update has a default aggregate budget of
 exhausted, its remaining rectangles are skipped; its valid prefix is retained and
 the update is still ACKed. Library callers can set `Config::frame_pixel_budget`.
 
-**… → Settings…** (Command-comma) opens one modal dialog with **General**, **Audio**,
-**Streaming** and **AI Teacher** tabs. Volume, live input/output levels, output-device
-selection and target buffering live in Audio; sample rate and output buffer are under
-**Advanced output options**. Preferences save immediately; AI-teacher sharing and
-control permissions are session-only and never saved. Dialogs release held remote
+**… → Settings…** (Command-comma) opens one modal dialog with **General**, **Audio**
+and **Streaming** tabs. Volume, live input/output levels, output-device selection
+and target buffering live in Audio; sample rate and output buffer are under
+**Advanced output options**. Preferences save immediately. AI assistance is a
+separate main-menu toggle, not a Settings option; permission is never saved. Dialogs release held remote
 input and keep field editing separate from device keyboard forwarding. Escape
 closes the dialog. Notifications overlay the workspace instead of resizing it.
 

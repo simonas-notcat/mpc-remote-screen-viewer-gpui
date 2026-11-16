@@ -1,5 +1,5 @@
-//! Device observations, local teaching feedback and locally approved assisted input.
-//! The bridge defaults to read-only; IPC cannot grant leases or approve gestures.
+//! Device observations, local teaching feedback and globally authorized assisted input.
+//! The bridge defaults to read-only; only the local Allow assistance toggle enables input.
 mod ipc;
 pub use ipc::{Bridge, default_socket_path, request};
 
@@ -125,18 +125,18 @@ impl Teacher {
             }),
         })
     }
-    /// Replace/clear the source before detaching a Session; revoke any attached lease.
+    /// Replace/clear the source before detaching a Session; cancel old-source input.
     pub fn set_source(&self, source: Option<SnapshotSource>) {
         let mut inner = self.inner.lock().unwrap();
         if let Some(control) = inner.control.take() {
-            control.revoke("AI teacher sharing revoked or source replaced");
+            control.cancel();
         }
         inner.source = source;
         inner.generation = inner.generation.wrapping_add(1);
         inner.observations.clear();
         inner.highlight = None;
     }
-    /// Attach input arbitration, still read-only until a LOCAL lease/approval.
+    /// Attach input arbitration; authorization comes only from the local viewer toggle.
     pub fn set_session(&self, session: &Session) {
         self.set_source(Some(session.snapshot_source()));
         self.inner.lock().unwrap().control = Some(session.control());
@@ -205,7 +205,7 @@ impl Teacher {
         });
         Ok(json!({
             "viewer_available": true,
-            "read_only": !control.as_ref().is_some_and(|c| c.status().lease_active),
+            "read_only": !control.as_ref().is_some_and(|c| c.status().enabled),
             "assisted_control": control.map(|c| c.state()),
             "state": format!("{:?}", snapshot.state),
             "error": snapshot.error,
@@ -396,7 +396,7 @@ impl Teacher {
             },
             gesture => gesture,
         };
-        control.propose(
+        control.submit(
             &screen,
             init.input_capabilities,
             init.upright_size(),
@@ -709,7 +709,6 @@ pub(crate) mod tests {
         for rotation in 0..4 {
             let teacher = Teacher::new().unwrap();
             let source = source(rotation);
-            let frame = source.lock().unwrap().framebuffer.clone().unwrap();
             let control = Arc::new(Controller::default());
             teacher.set_source(Some(source.clone()));
             teacher.inner.lock().unwrap().control = Some(control.clone());
@@ -735,7 +734,8 @@ pub(crate) mod tests {
                     )
                     .is_err()
             );
-            control.grant(&frame).unwrap();
+            control.set_enabled(true);
+            assert_eq!(teacher.state().unwrap()["read_only"], false);
             assert!(
                 teacher
                     .propose(
@@ -757,7 +757,7 @@ pub(crate) mod tests {
                 )
                 .unwrap();
             assert_eq!(result["action"]["position"], json!({"x": 50, "y": 40}));
-            assert_eq!(result["action"]["phase"], "pending_approval");
+            assert_eq!(result["action"]["phase"], "queued");
             assert!(
                 teacher
                     .propose(
@@ -792,12 +792,14 @@ pub(crate) mod tests {
                     .is_err()
             );
             teacher.set_source(None);
-            assert!(!control.status().lease_active);
+            assert!(control.status().enabled); // Source changes cancel input, not the global preference.
         }
     }
     #[test]
-    fn ipc_cannot_grant_approve_or_assert_confirmation() {
+    fn ipc_cannot_enable_global_permission_or_assert_confirmation() {
         for request in [
+            json!({"op": "set_enabled", "enabled": true}),
+            json!({"op": "allow_assistance"}),
             json!({"op": "grant"}),
             json!({"op": "approve", "id": 1}),
             json!({"op": "propose", "observation_id": "id", "gesture": {"kind": "click", "target": {"x": 1, "y": 1}, "hold_ms": 100}, "confirmed": true}),

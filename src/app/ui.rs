@@ -14,7 +14,6 @@ pub(super) enum SettingsTab {
     General,
     Audio,
     Streaming,
-    Teacher,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,7 +146,6 @@ impl Render for SettingsPane {
                             ("general", "General", SettingsTab::General),
                             ("audio", "Audio", SettingsTab::Audio),
                             ("streaming", "Streaming", SettingsTab::Streaming),
-                            ("teacher", "AI Teacher", SettingsTab::Teacher),
                         ]
                         .into_iter()
                         .map(|(id, label, value)| {
@@ -171,11 +169,9 @@ impl Render for SettingsPane {
                     ),
             )
             .when_some(page, |this, page| this.child(page))
-            .child(caption(if tab == SettingsTab::Teacher {
-                "AI-teacher sharing and control are session-only, never saved or automatically restored."
-            } else {
-                "Changes are saved automatically. Passwords are never saved."
-            }))
+            .child(caption(
+                "Changes are saved automatically. Passwords are never saved.",
+            ))
     }
 }
 
@@ -186,7 +182,6 @@ impl Viewer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.stop_assisted("Settings opened locally");
         self.release_input(cx);
         if self.show_settings {
             window.close_dialog(cx);
@@ -452,6 +447,7 @@ impl Viewer {
         let stats = self.show_stats;
         let analyzer = self.analyzer.is_some();
         let teacher = self.teacher.is_some();
+        let assistance = self.assistance_on;
         let recording = self.recorder.is_some();
         let recording_pending = self.recording_pending;
         let capture_pending = self.capture_pending;
@@ -460,6 +456,12 @@ impl Viewer {
             move |menu, _, _| {
                 menu.action_context(focus.clone())
                     .min_w(px(220.0))
+                    .item(
+                        PopupMenuItem::new("Allow assistance")
+                            .checked(assistance)
+                            .action(Box::new(AllowAssistance)),
+                    )
+                    .separator()
                     .when(!layout.capture, |menu| {
                         menu.menu_with_disabled(
                             "Screenshot",
@@ -486,7 +488,7 @@ impl Viewer {
                     )
                     .menu("Device information", Box::new(DeviceInformation))
                     .item(
-                        PopupMenuItem::new("AI teacher (read only)")
+                        PopupMenuItem::new("AI teacher sharing")
                             .checked(teacher)
                             .action(Box::new(AiTeacher)),
                     )
@@ -941,7 +943,6 @@ impl Viewer {
                 )
                 .into_any_element(),
             SettingsTab::Audio => self.audio_settings_page(cx),
-            SettingsTab::Teacher => self.teacher_settings_page(cx),
             SettingsTab::Streaming => {
                 let focus = self.settings_focus.clone();
                 let selected = self.viewer_settings.fps_limit;
@@ -963,42 +964,6 @@ impl Viewer {
                     .into_any_element()
             }
         }
-    }
-
-    fn teacher_settings_page(&self, cx: &mut Context<Self>) -> AnyElement {
-        let access = self.assisted_settings();
-        div()
-            .flex()
-            .flex_col()
-            .child(heading("AI Teacher", "Explicit local permission for MCP screen sharing and assisted input."))
-            .child(setting_row(
-                "AI teacher sharing",
-                "Share requested screens with same-user MCP clients and their configured model. Enables local teaching highlights; no device control by itself.",
-                Switch::new("settings-teacher-sharing")
-                    .checked(self.teacher.is_some())
-                    .on_click(cx.listener(|view, enabled, window, cx| {
-                        if *enabled != view.teacher.is_some() {
-                            view.toggle_teacher(&AiTeacher, window, cx);
-                        }
-                    })),
-            ))
-            .child(setting_row(
-                "Allow assisted proposals · 60 s",
-                "Grant a fresh 60-second control lease. Every click, drag, scroll, key or text gesture still requires separate local approval.",
-                Switch::new("settings-teacher-assisted")
-                    .checked(access.lease_active)
-                    .disabled(access.switch_disabled())
-                    .on_click(cx.listener(|view, enabled, _, cx| view.set_assisted_enabled(*enabled, cx))),
-            ))
-            .child(div().pt_3().child(caption(if access.lease_active {
-                "Lease active. Close Settings to review and approve a proposal in the teacher panel. Turning this switch off requests cancellation/release."
-            } else {
-                access.unavailable.unwrap_or("Read only. Turn on assisted proposals to grant a new lease; this switch turns off when the lease expires or is revoked.")
-            })))
-            .child(div().pt_3().child(caption(
-                "Keep the viewer focused after enabling: window deactivation, opening Settings again, Stop/F12, disconnect or reconfiguration revoke control. No automatic approval or renewal.",
-            )))
-            .into_any_element()
     }
 
     fn audio_settings_page(&self, cx: &mut Context<Self>) -> AnyElement {

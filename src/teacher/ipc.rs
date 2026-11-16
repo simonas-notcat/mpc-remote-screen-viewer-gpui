@@ -180,6 +180,9 @@ impl Bridge {
     /// Immediate local revocation. Joining/cleanup can run off the GPUI thread.
     pub fn request_stop(&self) {
         self.stop.store(true, Ordering::Release);
+        if let Some(control) = self.teacher.control() {
+            control.revoke("AI teacher sharing disabled locally");
+        }
         self.teacher.set_source(None);
     }
 }
@@ -202,7 +205,7 @@ pub fn request(path: &Path, request: &Request) -> Result<Reply, String> {
         write_frame(&mut stream, &bytes, MAX_REQUEST, Duration::from_secs(2))?;
         let bytes = read_frame(&mut stream, MAX_RESPONSE, Duration::from_secs(10))?;
         serde_json::from_slice(&bytes).map_err(io::Error::other)
-    })().map_err(|e| format!("AI teacher viewer unavailable: {e}. Enable View → AI Teacher (read only) in the viewer."))
+    })().map_err(|e| format!("AI teacher viewer unavailable: {e}. Enable AI teacher sharing or Allow assistance in the viewer's main menu."))
 }
 
 /// Fixed big-endian u32 length, validated before allocation. A wall-clock deadline

@@ -78,7 +78,7 @@ impl Launch {
         }
     }
 }
-pub const HELP: &str = "MPC Remote Screen Viewer GPUI (development build)\n\nUsage: mpc-remote-screen-viewer-gpui [--host HOST] [--port PORT] [--password PASSWORD] [--audio] [--teacher]\n\nPrefer the masked UI or REMOTE_SCREEN_PASSWORD to a command-line password.\n--host auto-connects only with a nonempty password; manual Connect permits empty passwords.\n--audio enables device audio playback when the service advertises audio support.\n--teacher explicitly enables the local read-only AI-teacher bridge; screen data may reach your configured model. Disable it in View or the AI-teacher indicator.\nUse only on a trusted LAN or through an external VPN; the device protocol has no encryption.";
+pub const HELP: &str = "MPC Remote Screen Viewer GPUI (development build)\n\nUsage: mpc-remote-screen-viewer-gpui [--host HOST] [--port PORT] [--password PASSWORD] [--audio] [--teacher]\n\nPrefer the masked UI or REMOTE_SCREEN_PASSWORD to a command-line password.\n--host auto-connects only with a nonempty password; manual Connect permits empty passwords.\n--audio enables device audio playback when the service advertises audio support.\n--teacher explicitly enables the local read-only AI-teacher bridge; screen data may reach your configured model. Allow assistance in the main menu globally enables input; turn it off or disable sharing with the AI-teacher indicator.\nUse only on a trusted LAN or through an external VPN; the device protocol has no encryption.";
 
 #[cfg(test)]
 mod tests {

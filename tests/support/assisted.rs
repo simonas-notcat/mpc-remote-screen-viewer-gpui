@@ -49,6 +49,7 @@ impl Device {
                         let rotation = init.payload.len() - 3;
                         init.payload[rotation] = 2; // Creates a new framebuffer identity.
                         send(&mut socket, init);
+                        send(&mut socket, fixture("frame_raw_and_solid"));
                     }
                     Ok(DeviceCommand::Frame) => send(&mut socket, fixture("frame_raw_and_solid")),
                     Ok(DeviceCommand::Close) | Err(mpsc::TryRecvError::Disconnected) => break,
@@ -158,6 +159,7 @@ impl Endpoint {
             })
             .unwrap();
         assert_eq!(value["device_input_sent"], false);
+        assert_eq!(value["queued"], true);
         value["action"]["id"].as_u64().unwrap()
     }
 }
@@ -203,11 +205,10 @@ fn screen(teacher: &Teacher) -> String {
 }
 
 #[test]
-fn ipc_proposals_need_local_approval_and_all_five_gestures_report_worker_writes() {
+fn one_global_toggle_runs_all_five_gestures_without_per_gesture_approval() {
     let (session, device) = Device::start();
     let endpoint = Endpoint::new(&session);
     let control = session.control();
-    let frame = session.snapshot().framebuffer.unwrap();
     let observation = endpoint.screen();
     assert!(
         endpoint
@@ -217,11 +218,8 @@ fn ipc_proposals_need_local_approval_and_all_five_gestures_report_worker_writes(
             })
             .is_err()
     );
-    control.grant(&frame).unwrap();
-    let id = endpoint.propose(&observation, click(100));
-    device.no_input();
-    assert!(control.approve(id + 1).is_err());
-    control.approve(id).unwrap();
+    control.set_enabled(true);
+    endpoint.propose(&observation, click(100));
     assert_eq!(device.input(), [input::pointer(4, 0, (1, 1), 0)]);
     assert_eq!(device.input(), [input::pointer(5, 0, (1, 1), 0)]);
     assert_eq!(device.input(), [InputEvent::RELEASE_ALL]);
@@ -235,7 +233,7 @@ fn ipc_proposals_need_local_approval_and_all_five_gestures_report_worker_writes(
             .is_err()
     );
 
-    let id = endpoint.propose(
+    endpoint.propose(
         &endpoint.screen(),
         Gesture::Drag {
             start: Point { x: 0, y: 0 },
@@ -243,7 +241,6 @@ fn ipc_proposals_need_local_approval_and_all_five_gestures_report_worker_writes(
             duration_ms: 100,
         },
     );
-    control.approve(id).unwrap();
     assert_eq!(device.input(), [input::pointer(4, 0, (0, 0), 0)]);
     assert_eq!(device.input()[0].kind, 3);
     let end = device.input();
@@ -252,26 +249,24 @@ fn ipc_proposals_need_local_approval_and_all_five_gestures_report_worker_writes(
     wait_phase(&control, Phase::Completed);
     assert_eq!(control.status().feedback.unwrap().path.len(), 3);
 
-    let id = endpoint.propose(
+    endpoint.propose(
         &endpoint.screen(),
         Gesture::Scroll {
             target: Point { x: 1, y: 0 },
             amount: -2,
         },
     );
-    control.approve(id).unwrap();
     assert_eq!(device.input(), [input::pointer(6, 0, (1, 0), -2)]);
     assert_eq!(device.input(), [InputEvent::RELEASE_ALL]);
     wait_phase(&control, Phase::Completed);
 
-    let id = endpoint.propose(
+    endpoint.propose(
         &endpoint.screen(),
         Gesture::PressKey {
             key: "A".into(),
             modifiers: [false; 4],
         },
     );
-    control.approve(id).unwrap();
     assert_eq!(
         device.input(),
         input::Control::default().key("A", [false; 4])
@@ -280,7 +275,7 @@ fn ipc_proposals_need_local_approval_and_all_five_gestures_report_worker_writes(
     wait_phase(&control, Phase::Completed);
 
     let text = "Ab!";
-    let id = endpoint.propose(&endpoint.screen(), Gesture::TypeText { text: text.into() });
+    endpoint.propose(&endpoint.screen(), Gesture::TypeText { text: text.into() });
     assert!(
         !endpoint
             .request(Request::GetState)
@@ -288,7 +283,6 @@ fn ipc_proposals_need_local_approval_and_all_five_gestures_report_worker_writes(
             .to_string()
             .contains(text)
     );
-    control.approve(id).unwrap();
     for c in text.chars() {
         assert_eq!(
             device.input(),
@@ -298,8 +292,9 @@ fn ipc_proposals_need_local_approval_and_all_five_gestures_report_worker_writes(
     assert_eq!(device.input(), [InputEvent::RELEASE_ALL]);
     wait_phase(&control, Phase::Completed);
     assert_eq!(control.status().feedback.unwrap().written_steps, 3);
+    assert!(control.status().enabled);
     endpoint.bridge.request_stop();
-    assert!(!control.status().lease_active);
+    assert!(!control.status().enabled);
     session.request_stop();
 }
 #[test]
@@ -308,9 +303,8 @@ fn cancellation_works_while_the_session_waits_for_a_framebuffer_reader() {
     let endpoint = Endpoint::new(&session);
     let control = session.control();
     let frame = session.snapshot().framebuffer.unwrap();
-    control.grant(&frame).unwrap();
-    let id = endpoint.propose(&endpoint.screen(), click(2000));
-    control.approve(id).unwrap();
+    control.set_enabled(true);
+    endpoint.propose(&endpoint.screen(), click(2000));
     assert_eq!(device.input()[0].kind, 4);
     let guard = frame.read().unwrap();
     device.commands.send(DeviceCommand::Frame).unwrap();
@@ -319,6 +313,7 @@ fn cancellation_works_while_the_session_waits_for_a_framebuffer_reader() {
     assert_eq!(device.input(), [InputEvent::RELEASE_ALL]);
     wait_phase(&control, Phase::Cancelled);
     assert!(control.status().feedback.unwrap().release_written);
+    assert!(control.status().enabled);
     device.no_input();
     drop(guard);
     session.request_stop();
@@ -330,15 +325,12 @@ fn local_input_takes_over_after_release_and_human_holds_block_agent_ownership() 
     teacher.set_session(&session);
     let control = session.control();
     let frame = session.snapshot().framebuffer.unwrap();
-    control.grant(&frame).unwrap();
+    control.set_enabled(true);
     teacher
         .handle(Request::Propose {
             observation_id: screen(&teacher),
             gesture: click(2000),
         })
-        .unwrap();
-    control
-        .approve(control.status().feedback.unwrap().id)
         .unwrap();
     assert_eq!(device.input()[0].kind, 4);
     let keys = input::Control::default().key("a", [false; 4]);
@@ -351,7 +343,7 @@ fn local_input_takes_over_after_release_and_human_holds_block_agent_ownership() 
     assert_eq!(device.input(), [InputEvent::RELEASE_ALL]);
     assert_eq!(device.input(), keys);
     wait_phase(&control, Phase::Cancelled);
-    assert!(!control.status().lease_active);
+    assert!(control.status().enabled);
     session
         .command(Command::Input {
             screen: frame.clone(),
@@ -360,7 +352,14 @@ fn local_input_takes_over_after_release_and_human_holds_block_agent_ownership() 
         .unwrap();
     assert_eq!(device.input()[0].kind, 4);
     assert!(control.status().human_held);
-    assert!(control.grant(&frame).is_err());
+    assert!(
+        teacher
+            .handle(Request::Propose {
+                observation_id: screen(&teacher),
+                gesture: click(100)
+            })
+            .is_err()
+    );
     session
         .command(Command::Input {
             screen: frame.clone(),
@@ -373,26 +372,32 @@ fn local_input_takes_over_after_release_and_human_holds_block_agent_ownership() 
         assert!(Instant::now() < until);
         thread::yield_now();
     }
-    control.grant(&frame).unwrap();
+    assert!(control.status().enabled);
+    teacher
+        .handle(Request::Propose {
+            observation_id: screen(&teacher),
+            gesture: click(100),
+        })
+        .unwrap();
+    assert_eq!(device.input()[0].kind, 4);
+    assert_eq!(device.input()[0].kind, 5);
+    assert_eq!(device.input(), [InputEvent::RELEASE_ALL]);
     session.request_stop();
 }
 #[test]
-fn lost_connection_reports_uncertainty_and_revokes_instead_of_replaying() {
+fn lost_connection_reports_uncertainty_without_resetting_global_permission() {
     let (session, device) = Device::start();
     let endpoint = Endpoint::new(&session);
     let control = session.control();
-    let frame = session.snapshot().framebuffer.unwrap();
-    control.grant(&frame).unwrap();
+    control.set_enabled(true);
     let observation = endpoint.screen();
-    let id = endpoint.propose(&observation, click(2000));
-    control.approve(id).unwrap();
+    endpoint.propose(&observation, click(2000));
     assert_eq!(device.input()[0].kind, 4);
     device.commands.send(DeviceCommand::Close).unwrap();
     wait(&session, |s| s.state != State::Streaming);
     wait_phase(&control, Phase::Uncertain);
-    assert!(!control.status().lease_active);
+    assert!(control.status().enabled);
     assert!(!control.status().feedback.unwrap().release_written);
-    assert!(control.approve(id).is_err());
     assert!(
         endpoint
             .request(Request::Propose {
@@ -404,15 +409,14 @@ fn lost_connection_reports_uncertainty_and_revokes_instead_of_replaying() {
     session.request_stop();
 }
 #[test]
-fn reconfiguration_releases_revokes_and_never_replays_approved_input() {
+fn reconfiguration_releases_old_input_and_preserves_global_authorization() {
     let (session, device) = Device::start();
     let endpoint = Endpoint::new(&session);
     let control = session.control();
     let frame = session.snapshot().framebuffer.unwrap();
-    control.grant(&frame).unwrap();
+    control.set_enabled(true);
     let observation = endpoint.screen();
-    let id = endpoint.propose(&observation, click(2000));
-    control.approve(id).unwrap();
+    endpoint.propose(&observation, click(2000));
     assert_eq!(device.input()[0].kind, 4);
     device.commands.send(DeviceCommand::Reconfigure).unwrap();
     assert_eq!(device.input(), [InputEvent::RELEASE_ALL]);
@@ -422,12 +426,39 @@ fn reconfiguration_releases_revokes_and_never_replays_approved_input() {
             .as_ref()
             .is_some_and(|f| !Arc::ptr_eq(f, &frame))
     });
-    assert!(!control.status().lease_active);
-    assert!(control.approve(id).is_err());
+    assert!(control.status().enabled);
     assert!(
         endpoint
             .request(Request::Propose {
                 observation_id: observation,
+                gesture: click(100)
+            })
+            .is_err()
+    );
+    device.no_input();
+    wait(&session, |s| s.statistics.frames > 1);
+    endpoint.propose(&endpoint.screen(), click(100));
+    assert_eq!(device.input()[0].kind, 4);
+    assert_eq!(device.input()[0].kind, 5);
+    assert_eq!(device.input(), [InputEvent::RELEASE_ALL]);
+    session.request_stop();
+}
+#[test]
+fn turning_global_assistance_off_releases_running_input_and_rejects_more() {
+    let (session, device) = Device::start();
+    let endpoint = Endpoint::new(&session);
+    let control = session.control();
+    control.set_enabled(true);
+    endpoint.propose(&endpoint.screen(), click(2000));
+    assert_eq!(device.input()[0].kind, 4);
+    control.set_enabled(false);
+    assert_eq!(device.input(), [InputEvent::RELEASE_ALL]);
+    wait_phase(&control, Phase::Cancelled);
+    assert!(!control.status().enabled);
+    assert!(
+        endpoint
+            .request(Request::Propose {
+                observation_id: endpoint.screen(),
                 gesture: click(100)
             })
             .is_err()

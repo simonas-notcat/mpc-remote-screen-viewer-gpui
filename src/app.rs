@@ -74,6 +74,7 @@ actions!(
         PlayAudio,
         AudioAnalyzer,
         AiTeacher,
+        AllowAssistance,
         AudioSettings,
         DeviceInformation,
         Recording,
@@ -129,9 +130,10 @@ pub fn register_actions(cx: &mut App) {
                 MenuItem::action("Device Information…", DeviceInformation),
                 MenuItem::action("Refresh Screen", Refresh),
                 MenuItem::action("Remote Control (F12)", RemoteControl),
+                MenuItem::action("Allow assistance", AllowAssistance),
                 MenuItem::action("Play Device Audio", PlayAudio),
                 MenuItem::action("Audio Analyzer", AudioAnalyzer),
-                MenuItem::action("AI Teacher (read only)", AiTeacher),
+                MenuItem::action("AI Teacher sharing", AiTeacher),
                 MenuItem::action("Audio Settings…", AudioSettings),
             ],
         },
@@ -151,6 +153,7 @@ pub struct Viewer {
     teacher: Option<TeacherBridge>,
     teacher_highlight: Option<TeacherHighlight>,
     teacher_control: Option<TeacherControlStatus>,
+    assistance_on: bool,
     viewer_settings: preferences::ViewerSettings,
     settings_writer: Option<preferences::ViewerSettingsWriter>,
     settings_error: Option<String>,
@@ -330,7 +333,6 @@ impl Viewer {
         .detach();
         cx.observe_window_activation(window, |view, window, cx| {
             if !window.is_window_active() {
-                view.stop_assisted("Viewer window deactivated");
                 view.release_input(cx);
             }
         })
@@ -429,6 +431,7 @@ impl Viewer {
             teacher: None,
             teacher_highlight: None,
             teacher_control: None,
+            assistance_on: false,
             settings_writer: writer.ok(),
             settings_error,
             generation: 0,
@@ -768,6 +771,7 @@ impl Viewer {
                     session
                         .audio()
                         .set_analyzer(self.analyzer.as_ref().map(|a| a.input.clone()));
+                    session.control().set_enabled(self.assistance_on);
                     if let Some(teacher) = &self.teacher {
                         teacher.teacher().set_session(&session);
                     }
@@ -874,7 +878,6 @@ impl Viewer {
         self.drag = None;
     }
     fn remote_control(&mut self, _: &RemoteControl, window: &mut Window, cx: &mut Context<Self>) {
-        self.stop_assisted("Local remote-control toggle / takeover");
         if self.show_settings {
             return;
         }
@@ -1446,12 +1449,7 @@ impl Viewer {
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
                 if view.control_on {
                     let held = view.control.touch || view.control.buttons.iter().any(|v| *v);
-                    if !held
-                        && view
-                            .teacher_control
-                            .as_ref()
-                            .is_some_and(|s| s.lease_active)
-                    {
+                    if !held && view.assistance_on {
                         return; // Hover alone is not takeover; press/scroll/key or Stop is.
                     }
                     if let Some(p) = view.pointer_position(event.position, held)
@@ -1622,6 +1620,7 @@ impl Render for Viewer {
             .on_action(cx.listener(Self::audio_settings))
             .on_action(cx.listener(Self::toggle_analyzer))
             .on_action(cx.listener(Self::toggle_teacher))
+            .on_action(cx.listener(Self::toggle_assistance))
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, window, cx| {
                 if event.pressed_button != Some(MouseButton::Left) {
                     view.resizing_analyzer = false;
@@ -1691,9 +1690,17 @@ impl Render for Viewer {
                         .child(self.teacher_indicator(cx)),
                 )
             })
-            .when(self.teacher.is_some() && !self.show_settings, |this| {
-                this.child(self.teacher_controls(cx))
-            })
+            .when(
+                self.teacher.is_some()
+                    && !self.show_settings
+                    && (self.assistance_on
+                        || self
+                            .teacher_control
+                            .as_ref()
+                            .and_then(|s| s.feedback.as_ref())
+                            .is_some_and(|f| f.phase.active() || f.overlay_visible)),
+                |this| this.child(self.teacher_controls(cx)),
+            )
             .when(self.analyzer.is_some(), |this| {
                 this.child(self.analyzer_panel(cx))
             })

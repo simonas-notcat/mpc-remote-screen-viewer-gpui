@@ -26,13 +26,12 @@ fn click() -> Gesture {
 }
 fn setup() -> (Arc<Controller>, Screen) {
     let controller = Arc::new(Controller::default());
-    let screen = screen();
-    controller.grant(&screen).unwrap();
-    (controller, screen)
+    controller.set_enabled(true);
+    (controller, screen())
 }
-fn propose(controller: &Controller, screen: &Screen, gesture: Gesture) -> u64 {
+fn submit(controller: &Controller, screen: &Screen, gesture: Gesture) -> u64 {
     let data = controller
-        .propose(
+        .submit(
             screen,
             7,
             (200, 100),
@@ -42,7 +41,8 @@ fn propose(controller: &Controller, screen: &Screen, gesture: Gesture) -> u64 {
         )
         .unwrap();
     assert_eq!(data["device_input_sent"], false);
-    assert_eq!(data["queued"], false);
+    assert_eq!(data["queued"], true);
+    assert_eq!(data["action"]["phase"], "queued");
     data["action"]["id"].as_u64().unwrap()
 }
 fn drive(
@@ -195,28 +195,22 @@ fn keyboard_text_are_bounded_fully_released_and_never_echoed() {
     }
 }
 #[test]
-fn default_read_only_and_exact_local_approval_are_mandatory() {
+fn global_toggle_is_off_by_default_and_on_runs_without_per_gesture_approval() {
     let screen = screen();
     let controller = Arc::new(Controller::default());
+    assert!(!controller.status().enabled);
     assert!(
         controller
-            .propose(&screen, 7, (200, 100), click(), 0, expires())
+            .submit(&screen, 7, (200, 100), click(), 0, expires())
             .is_err()
     );
-    controller.grant(&screen).unwrap();
-    let id = propose(&controller, &screen, click());
+    controller.set_enabled(true);
+    submit(&controller, &screen, click());
     let mut running = None;
-    assert!(drive(&controller, &mut running, &screen).is_empty());
-    assert!(controller.approve(id + 1).is_err());
     assert_eq!(
-        controller.status().feedback.unwrap().phase,
-        Phase::PendingApproval
+        drive(&controller, &mut running, &screen),
+        [input::pointer(4, 0, (12, 34), 0)]
     );
-    controller.approve(id).unwrap();
-    assert!(controller.approve(id).is_err()); // No double approval.
-    assert_eq!(controller.status().feedback.unwrap().phase, Phase::Queued);
-    let sent = drive(&controller, &mut running, &screen);
-    assert_eq!(sent.len(), 1);
     let feedback = controller.status().feedback.unwrap();
     assert_eq!(feedback.phase, Phase::Running);
     assert!(feedback.held);
@@ -229,21 +223,17 @@ fn default_read_only_and_exact_local_approval_are_mandatory() {
     assert_eq!(feedback.written_steps, 2);
     assert!(!feedback.held);
     assert!(feedback.release_written);
+    assert!(controller.status().enabled);
     assert_eq!(controller.state()["visually_verified"], false);
-}
-#[test]
-fn observations_before_and_during_gestures_are_consumed_and_no_sequences_queue() {
-    let (controller, screen) = setup();
-    let before = controller.epoch();
-    let id = propose(&controller, &screen, click());
+    assert!(controller.state().get("lease_remaining_ms").is_none());
+    // The same global authorization covers the next fresh gesture.
+    submit(&controller, &screen, click());
+    controller.set_enabled(false);
+    assert!(drive(&controller, &mut running, &screen).is_empty());
+    assert!(!controller.status().enabled);
     assert!(
         controller
-            .propose(&screen, 7, (200, 100), click(), before, expires())
-            .is_err()
-    );
-    assert!(
-        controller
-            .propose(
+            .submit(
                 &screen,
                 7,
                 (200, 100),
@@ -253,24 +243,66 @@ fn observations_before_and_during_gestures_are_consumed_and_no_sequences_queue()
             )
             .is_err()
     );
-    controller.approve(id).unwrap();
+}
+#[test]
+fn permission_survives_completion_cancel_and_source_changes_until_explicitly_off() {
+    let (controller, screen) = setup();
+    submit(&controller, &screen, click());
+    controller.cancel();
+    assert!(controller.status().enabled);
+    assert!(drive(&controller, &mut None, &screen).is_empty());
+    submit(&controller, &screen, click());
+    controller.disconnected();
+    assert!(controller.status().enabled);
+    let replacement = self::screen();
+    assert!(drive(&controller, &mut None, &replacement).is_empty()); // No old-source replay.
+    submit(&controller, &replacement, click());
+    let mut running = None;
+    assert!(!drive(&controller, &mut running, &replacement).is_empty());
+    finish(&controller, &mut running, &replacement);
+    assert!(controller.status().enabled);
+    controller.set_enabled(false);
+    assert!(!controller.status().enabled);
+}
+#[test]
+fn observations_before_and_during_gestures_are_consumed_and_no_sequences_queue() {
+    let (controller, screen) = setup();
+    let before = controller.epoch();
+    submit(&controller, &screen, click());
+    assert!(
+        controller
+            .submit(&screen, 7, (200, 100), click(), before, expires())
+            .is_err()
+    );
+    assert!(
+        controller
+            .submit(
+                &screen,
+                7,
+                (200, 100),
+                click(),
+                controller.epoch(),
+                expires()
+            )
+            .is_err()
+    );
     let mut running = None;
     drive(&controller, &mut running, &screen);
     let during = controller.epoch();
     finish(&controller, &mut running, &screen);
     assert!(
         controller
-            .propose(&screen, 7, (200, 100), click(), during, expires())
+            .submit(&screen, 7, (200, 100), click(), during, expires())
             .is_err()
     );
-    propose(&controller, &screen, click()); // Only a fresh post-completion epoch succeeds.
+    submit(&controller, &screen, click());
 }
 #[test]
-fn observation_expiry_caps_approval_and_running_deadlines() {
+fn observation_expiry_caps_queue_and_execution_but_not_global_permission() {
     let (controller, screen) = setup();
     assert!(
         controller
-            .propose(
+            .submit(
                 &screen,
                 7,
                 (200, 100),
@@ -280,9 +312,9 @@ fn observation_expiry_caps_approval_and_running_deadlines() {
             )
             .is_err()
     );
-    let expiry = Instant::now() + Duration::from_secs(1);
+    let expiry = Instant::now() + Duration::from_secs(4);
     controller
-        .propose(&screen, 7, (200, 100), click(), controller.epoch(), expiry)
+        .submit(&screen, 7, (200, 100), click(), controller.epoch(), expiry)
         .unwrap();
     assert_eq!(
         controller
@@ -295,61 +327,23 @@ fn observation_expiry_caps_approval_and_running_deadlines() {
             .until,
         expiry
     );
-    controller
-        .approve(controller.status().feedback.unwrap().id)
-        .unwrap();
     let mut running = None;
     drive(&controller, &mut running, &screen);
     assert_eq!(running.as_ref().unwrap().deadline, expiry);
     controller.cancel();
     drive(&controller, &mut running, &screen);
+    assert!(controller.status().enabled);
 }
 #[test]
-fn pending_rejection_and_cancellation_send_nothing() {
-    let (controller, screen) = setup();
-    let id = propose(&controller, &screen, click());
-    controller.reject(id + 1);
-    assert_eq!(
-        controller.status().feedback.unwrap().phase,
-        Phase::PendingApproval
-    );
-    controller.reject(id);
-    assert_eq!(controller.status().feedback.unwrap().phase, Phase::Rejected);
-    assert!(controller.approve(id).is_err());
-    let mut running = None;
-    assert!(drive(&controller, &mut running, &screen).is_empty());
-    let id = propose(&controller, &screen, click());
-    controller.approve(id).unwrap();
-    controller.cancel();
-    controller.cancel();
-    assert!(drive(&controller, &mut running, &screen).is_empty());
-    assert_eq!(controller.status().feedback.unwrap().written_steps, 0);
-    assert_eq!(
-        controller.status().feedback.unwrap().phase,
-        Phase::Cancelled
-    );
-}
-#[test]
-fn running_cancel_lease_expiry_and_deadlines_release_without_continuing() {
-    for stop in 0..4 {
+fn running_cancel_toggle_off_and_deadline_release_without_continuing() {
+    for stop in 0..3 {
         let (controller, screen) = setup();
-        let id = propose(&controller, &screen, click());
-        controller.approve(id).unwrap();
+        submit(&controller, &screen, click());
         let mut running = None;
         drive(&controller, &mut running, &screen);
         match stop {
             0 => controller.cancel(),
-            1 => controller.revoke("Local stop"),
-            2 => {
-                controller
-                    .inner
-                    .lock()
-                    .unwrap()
-                    .lease
-                    .as_mut()
-                    .unwrap()
-                    .until = Instant::now()
-            }
+            1 => controller.set_enabled(false),
             _ => running.as_mut().unwrap().deadline = Instant::now(),
         }
         assert!(controller.status().feedback.unwrap().held);
@@ -362,35 +356,29 @@ fn running_cancel_lease_expiry_and_deadlines_release_without_continuing() {
         assert_eq!(feedback.phase, Phase::Cancelled);
         assert!(feedback.release_written);
         assert_eq!(feedback.written_steps, 1);
+        assert_eq!(controller.status().enabled, stop != 1);
     }
 }
 #[test]
-fn pending_approval_and_queue_expire_and_source_capabilities_are_rechecked() {
-    for approved in [false, true] {
-        let (controller, screen) = setup();
-        let id = propose(&controller, &screen, click());
-        if approved {
-            controller.approve(id).unwrap();
-        }
-        controller
-            .inner
-            .lock()
-            .unwrap()
-            .pending
-            .as_mut()
-            .unwrap()
-            .until = Instant::now();
-        assert!(controller.approve(id).is_err());
-        assert_eq!(
-            controller.status().feedback.unwrap().phase,
-            Phase::Cancelled
-        );
-        assert!(drive(&controller, &mut None, &screen).is_empty());
-    }
+fn queued_work_expires_and_source_capabilities_are_rechecked() {
+    let (controller, screen) = setup();
+    submit(&controller, &screen, click());
+    controller
+        .inner
+        .lock()
+        .unwrap()
+        .pending
+        .as_mut()
+        .unwrap()
+        .until = Instant::now();
+    assert_eq!(
+        controller.status().feedback.unwrap().phase,
+        Phase::Cancelled
+    );
+    assert!(controller.status().enabled);
+    assert!(drive(&controller, &mut None, &screen).is_empty());
     for caps in [0, 4] {
-        let (controller, screen) = setup();
-        let id = propose(&controller, &screen, click());
-        controller.approve(id).unwrap();
+        submit(&controller, &screen, click());
         controller
             .drive(&mut None, &screen, caps, |_| {
                 panic!("Unsupported input must not be written")
@@ -398,30 +386,16 @@ fn pending_approval_and_queue_expire_and_source_capabilities_are_rechecked() {
             .unwrap_or_else(|_: ()| unreachable!());
         assert_eq!(controller.status().feedback.unwrap().phase, Phase::Rejected);
     }
-    let (controller, screen) = setup();
-    let id = propose(&controller, &screen, click());
-    controller.approve(id).unwrap();
+    submit(&controller, &screen, click());
     let replacement = self::screen();
     assert!(drive(&controller, &mut None, &replacement).is_empty());
     assert_eq!(controller.status().feedback.unwrap().phase, Phase::Rejected);
-    assert!(
-        controller
-            .propose(
-                &replacement,
-                7,
-                (200, 100),
-                click(),
-                controller.epoch(),
-                expires()
-            )
-            .is_err()
-    );
+    submit(&controller, &replacement, click()); // Fresh input may use the new source, not old queued input.
 }
 #[test]
 fn terminal_overlay_expiry_publishes_a_clear_but_keeps_action_results() {
     let (controller, screen) = setup();
-    let id = propose(&controller, &screen, click());
-    controller.approve(id).unwrap();
+    submit(&controller, &screen, click());
     let mut running = None;
     drive(&controller, &mut running, &screen);
     finish(&controller, &mut running, &screen);
@@ -439,12 +413,12 @@ fn terminal_overlay_expiry_publishes_a_clear_but_keeps_action_results() {
     assert_ne!(before, after);
     assert!(!after.feedback.as_ref().unwrap().overlay_visible);
     assert_eq!(after.feedback.unwrap().phase, Phase::Completed);
-    assert_eq!(controller.status(), controller.status()); // No perpetual repaint updates.
+    assert_eq!(controller.status(), controller.status());
 }
 #[test]
 fn drag_path_tracks_only_actual_writes_and_stays_bounded() {
     let (controller, screen) = setup();
-    let id = propose(
+    submit(
         &controller,
         &screen,
         Gesture::Drag {
@@ -454,7 +428,6 @@ fn drag_path_tracks_only_actual_writes_and_stays_bounded() {
         },
     );
     assert!(controller.status().feedback.unwrap().path.is_empty());
-    controller.approve(id).unwrap();
     let mut running = None;
     drive(&controller, &mut running, &screen);
     assert_eq!(controller.status().feedback.unwrap().path.len(), 1);
@@ -469,10 +442,9 @@ fn drag_path_tracks_only_actual_writes_and_stays_bounded() {
     assert_eq!(feedback.phase, Phase::Completed);
 }
 #[test]
-fn worker_write_failure_is_uncertain_never_retried_and_release_not_claimed() {
+fn worker_write_failure_is_uncertain_never_retried_and_does_not_reset_global_toggle() {
     let (controller, screen) = setup();
-    let id = propose(&controller, &screen, click());
-    controller.approve(id).unwrap();
+    submit(&controller, &screen, click());
     let mut running = None;
     assert_eq!(
         controller.drive(&mut running, &screen, 7, |_| Err("partial write")),
@@ -481,21 +453,20 @@ fn worker_write_failure_is_uncertain_never_retried_and_release_not_claimed() {
     drop(running);
     let feedback = controller.status().feedback.unwrap();
     assert_eq!(feedback.phase, Phase::Uncertain);
-    assert_eq!(feedback.written_steps, 0);
     assert!(!feedback.release_written);
-    assert!(!controller.status().lease_active);
+    assert!(controller.status().enabled);
     assert!(drive(&controller, &mut None, &screen).is_empty());
 }
 #[test]
-fn no_locks_cross_writes_and_local_takeover_waits_for_agent_release() {
+fn off_then_on_during_write_cannot_resurrect_the_cancelled_gesture() {
     let (controller, screen) = setup();
-    let id = propose(&controller, &screen, click());
-    controller.approve(id).unwrap();
+    submit(&controller, &screen, click());
     let mut running = None;
     controller
         .drive(&mut running, &screen, 7, |_| {
             assert_eq!(controller.status().feedback.unwrap().written_steps, 0);
-            controller.revoke("Concurrent local stop during write");
+            controller.set_enabled(false);
+            controller.set_enabled(true);
             Ok::<_, ()>(())
         })
         .unwrap();
@@ -503,12 +474,62 @@ fn no_locks_cross_writes_and_local_takeover_waits_for_agent_release() {
         drive(&controller, &mut running, &screen),
         [InputEvent::RELEASE_ALL]
     );
+    assert_eq!(
+        controller.status().feedback.unwrap().phase,
+        Phase::Cancelled
+    );
+    assert!(controller.status().enabled);
+}
+#[test]
+fn local_takeover_preserves_permission_but_blocks_new_input_until_released() {
+    let (controller, screen) = setup();
+    submit(&controller, &screen, click());
+    let mut running = None;
+    drive(&controller, &mut running, &screen);
     controller.local_input(&[input::pointer(4, 0, (1, 1), 0)]);
-    assert!(controller.grant(&screen).is_err());
+    assert_eq!(
+        drive(&controller, &mut running, &screen),
+        [InputEvent::RELEASE_ALL]
+    );
+    assert!(controller.status().enabled);
+    assert!(
+        controller
+            .submit(
+                &screen,
+                7,
+                (200, 100),
+                click(),
+                controller.epoch(),
+                expires()
+            )
+            .is_err()
+    );
     controller.local_written();
-    assert!(controller.grant(&screen).is_err()); // Whole local held gesture owns input.
+    assert!(
+        controller
+            .submit(
+                &screen,
+                7,
+                (200, 100),
+                click(),
+                controller.epoch(),
+                expires()
+            )
+            .is_err()
+    );
     controller.local_input(&[input::pointer(5, 0, (1, 1), 0)]);
-    assert!(controller.grant(&screen).is_err()); // Release write is still in flight.
+    assert!(
+        controller
+            .submit(
+                &screen,
+                7,
+                (200, 100),
+                click(),
+                controller.epoch(),
+                expires()
+            )
+            .is_err()
+    );
     controller.local_written();
-    controller.grant(&screen).unwrap();
+    submit(&controller, &screen, click());
 }
