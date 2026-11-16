@@ -166,7 +166,7 @@ fn stdio_device_tools_work_without_manual_or_external_tools() {
     );
     client.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
     let tools = client.rpc("tools/list", json!({}));
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 10);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 11);
     let state = client.tool("mpc_get_state", json!({}));
     assert_eq!(state["structuredContent"]["viewer_available"], false);
     assert!(state["structuredContent"].get("manual").is_none());
@@ -220,6 +220,7 @@ fn stdio_device_tools_work_without_manual_or_external_tools() {
     // Tools are available, but enabling screen sharing never authorizes input.
     for (name, args) in [
         ("mpc_click", json!({"target": {"x": 1, "y": 1}})),
+        ("mpc_double_tap", json!({"target": {"x": 1, "y": 1}})),
         (
             "mpc_drag",
             json!({"start": {"x": 1, "y": 1}, "end": {"x": 2, "y": 2}}),

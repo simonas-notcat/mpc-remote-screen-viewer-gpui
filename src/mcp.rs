@@ -86,6 +86,13 @@ pub struct ClickArgs {
 }
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct DoubleTapArgs {
+    pub observation_id: String,
+    /// Target in returned-screenshot pixels. Both taps use this same point.
+    pub target: Point,
+}
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DragArgs {
     pub observation_id: String,
     /// Endpoints in returned-screenshot pixels; straight-line drag only.
@@ -203,6 +210,27 @@ impl TeacherServer {
             gesture: Gesture::Click {
                 target: args.target,
                 hold_ms: args.hold_ms.unwrap_or(100),
+            },
+        })
+        .await
+    }
+    #[tool(
+        description = "Queue one double tap at a returned-image target: two 60 ms presses separated by a 100 ms gap, as one bounded gesture. Requires a fresh observation and the viewer's global Allow assistance toggle ON; no per-gesture approval. Poll state, then capture a NEW screen to verify. Socket writes are not device acknowledgement. Never automatically retry.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn mpc_double_tap(
+        &self,
+        Parameters(args): Parameters<DoubleTapArgs>,
+    ) -> Result<CallToolResult, String> {
+        self.viewer(Request::Propose {
+            observation_id: args.observation_id,
+            gesture: Gesture::DoubleTap {
+                target: args.target,
             },
         })
         .await
@@ -331,7 +359,7 @@ impl ServerHandler for TeacherServer {
 mod tests {
     use super::*;
     #[test]
-    fn only_ten_device_tools_are_exposed_with_honest_annotations() {
+    fn only_eleven_device_tools_are_exposed_with_honest_annotations() {
         let tools = TeacherServer::tool_router().list_all();
         let mut names: Vec<_> = tools.iter().map(|t| t.name.as_ref()).collect();
         names.sort();
@@ -341,6 +369,7 @@ mod tests {
                 "mpc_cancel",
                 "mpc_clear_highlight",
                 "mpc_click",
+                "mpc_double_tap",
                 "mpc_drag",
                 "mpc_get_screen",
                 "mpc_get_state",
@@ -353,7 +382,12 @@ mod tests {
         for tool in tools {
             let mutation = matches!(
                 tool.name.as_ref(),
-                "mpc_click" | "mpc_drag" | "mpc_scroll" | "mpc_press_key" | "mpc_type_text"
+                "mpc_click"
+                    | "mpc_double_tap"
+                    | "mpc_drag"
+                    | "mpc_scroll"
+                    | "mpc_press_key"
+                    | "mpc_type_text"
             );
             let read = matches!(tool.name.as_ref(), "mpc_get_state" | "mpc_get_screen");
             let annotations = tool.annotations.unwrap();

@@ -381,6 +381,9 @@ impl Teacher {
                 target: map(target)?,
                 hold_ms,
             },
+            Gesture::DoubleTap { target } => Gesture::DoubleTap {
+                target: map(target)?,
+            },
             Gesture::Drag {
                 start,
                 end,
@@ -793,6 +796,48 @@ pub(crate) mod tests {
             );
             teacher.set_source(None);
             assert!(control.status().enabled); // Source changes cancel input, not the global preference.
+        }
+    }
+    #[test]
+    fn double_tap_maps_returned_pixels_and_requires_fresh_authorized_observation() {
+        for rotation in 0..4 {
+            let teacher = Teacher::new().unwrap();
+            teacher.set_source(Some(source(rotation)));
+            let control = Arc::new(Controller::default());
+            teacher.inner.lock().unwrap().control = Some(control.clone());
+            let (data, _) = capture(
+                &teacher,
+                Some(Rect {
+                    x: 10,
+                    y: 10,
+                    width: 80,
+                    height: 60,
+                }),
+                Some(64),
+            );
+            let id = data["observation_id"].as_str().unwrap();
+            let gesture = || Gesture::DoubleTap {
+                target: Point { x: 32, y: 24 },
+            };
+            assert!(teacher.propose(id, gesture()).is_err());
+            control.set_enabled(true);
+            assert!(
+                teacher
+                    .propose(
+                        id,
+                        Gesture::DoubleTap {
+                            target: Point { x: 64, y: 0 }
+                        }
+                    )
+                    .is_err()
+            );
+            let result = teacher.propose(id, gesture()).unwrap();
+            assert_eq!(result["action"]["position"], json!({"x": 50, "y": 40}));
+            assert_eq!(result["action"]["gesture"], "double_tap");
+            assert_eq!(result["action"]["total_steps"], 4);
+            assert!(teacher.propose(id, gesture()).is_err());
+            teacher.handle(Request::Cancel).unwrap();
+            assert!(teacher.propose(id, gesture()).is_err());
         }
     }
     #[test]

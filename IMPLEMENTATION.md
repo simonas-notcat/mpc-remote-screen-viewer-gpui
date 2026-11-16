@@ -86,8 +86,8 @@ back to upright device pixels and are painted in the existing canvas, never into
 captures/recordings. They clear on expiry, disconnection/reconfiguration or revocation.
 
 The optional MCP executable has no GPUI/output-device, PDF or Poppler dependency.
-MCP advertises ten device tools. Phase 2.5 removes its two manual tools and manual
-state fields. Teaching and reference retrieval live in the portable
+MCP advertises eleven device tools, including atomic `mpc_double_tap`. Phase 2.5
+removes its two manual tools and manual state fields. Teaching and reference retrieval live in the portable
 `.agents/skills/force-teacher/` skill. Its one-time Python/Poppler import verifies
 Force/v3.10.1 identity, fingerprints the PDF and atomically publishes local,
 gitignored Markdown page files with citations, printed labels and small linked
@@ -110,8 +110,9 @@ it is not persisted. Only local UI can enable it; MCP cannot enable permission.
 
 The GUI-independent `control.rs` layer shares `input.rs` wire construction. The
 session worker alone executes gestures, records socket-written steps and releases
-on completion/cancel. Queue and execution deadlines are 5 seconds, capped by the
-referenced observation's expiry; these bound a gesture, not global authorization.
+on completion/cancel. Double taps share this lifecycle: four pointer edges at
+0/60/160/220 ms, one observation, no interleaved action or per-tap MCP round trips.
+Queue and execution deadlines are 5 seconds, capped by the referenced observation's expiry; these bound a gesture, not global authorization.
 Failed writes are uncertain and never replayed. Local input cancels/releases agent
 ownership first; held/in-flight local inputs block new gestures without resetting
 the toggle. Source changes cancel old work and invalidate observations, not global
@@ -138,7 +139,7 @@ instead of treating missing search matches or related TC text as a verified answ
 lexical lookup and page-248 PNG rendering offline; it is not live skill acceptance.
 IPC/unit tests cover permission/framing bounds, active/stale sockets, observation TTL, fit/pan transforms, overlay-free
 captures, authorization/deadlines, consumed observations and failed-write uncertainty.
-Loopback session tests cover all five gestures under one global toggle without
+Loopback session tests cover all six gestures under one global toggle without
 additional approval, off/cancel release, framebuffer contention, local takeover,
 permission surviving source changes, and no old-work replay after reconfiguration.
 Regression tests include a single large LZ4 rectangle, many expensive rectangles,
@@ -146,6 +147,12 @@ release/observation deadlines during decoding, release before joining a slow cod
 on session shutdown, human ownership while readers block pixels, and cancellation
 of queued agent work before its first write. Decoder
 unit tests enforce one in-flight job, result/error propagation and reader-safe shutdown.
+A separately authorized live double tap opened Jura's preset menu after rebuilding
+and restarting both viewer and MCP server; a fresh screenshot verified the result.
+Subsequent bass/drum editing was visually checked, not audibly auditioned or saved.
+Model/firmware metadata remained absent, so Force/manual compatibility is unverified.
+See `docs/mcp-mpc.md` for the bounded evidence and restart requirements.
+
 Tests never connect to real hardware. Socket-written is not device-acknowledged or
 visually verified; broader phase-2 live rendering/input acceptance remains open.
 Two separately authorized live MPC menu-navigation clicks were visually verified;

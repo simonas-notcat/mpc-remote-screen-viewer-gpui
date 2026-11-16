@@ -305,7 +305,9 @@ destructive, not semantically classified as safe, and must stay within the user'
 
 Input tools queue one gesture directly while enabled. Queue/execution deadlines are
 5 seconds, capped by observation expiry; these do not expire global permission.
-Click holds are 50–2000 ms; straight drags 100–3000 ms / at most 61 steps; scroll is
+Click holds are 50–2000 ms; double taps are one four-edge gesture (60 ms press,
+100 ms released gap, 60 ms press at the same target); straight drags are
+100–3000 ms / at most 61 steps; scroll is
 nonzero −120…120 wire units; text is 1–64 printable US ASCII characters. Capabilities
 and source identity are checked before construction/execution. Each gesture references
 a fresh observation, mapped from returned-image crop/resize into upright coordinates.
@@ -478,7 +480,7 @@ over CLI passwords, which can appear in process listings/history.
 never persisted. The robot **Toggle MCP** button in the normal/fullscreen top bar
 controls sharing; its selected state indicates sharing is enabled. The separate
 optional `mpc-mcp` executable uses stdio without a PDF/Poppler dependency;
-`--socket`/`MPC_TEACHER_SOCKET` select local IPC only. Its ten tools contain no
+`--socket`/`MPC_TEACHER_SOCKET` select local IPC only. Its eleven tools contain no
 manual retrieval API. `--manual` is rejected with a migration message. The separate
 Force teacher skill uses a locally imported, fingerprinted Markdown corpus with
 ordinary file/search tools, preserving source page boundaries and citations.

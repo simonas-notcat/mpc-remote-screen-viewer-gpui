@@ -118,7 +118,10 @@ See [`docs/mcp-mpc.md`](docs/mcp-mpc.md) for the architecture, phased plan,
 full tool contracts and MCP-client configuration. Device state/screen capture and
 local highlights work in read-only mode. Manual retrieval and teaching live in the
 [Force teacher skill](.agents/skills/force-teacher/SKILL.md), not MCP. Phase 2 adds bounded
-click/long-press, drag, scroll, key and ASCII-text input, plus cancellation.
+click/long-press, double-tap, drag, scroll, key and ASCII-text input, plus cancellation.
+`mpc_double_tap` sends two 60 ms taps with a 100 ms gap as one bounded action;
+use it instead of separate click calls for double-tap controls. After upgrading,
+rebuild/restart **both** viewer and MCP server and refresh client tool discovery.
 The top toolbar has one robot-icon **Toggle MCP** button for sharing. While enabled,
 an adjacent **Allow assistance** switch grants global input permission: no per-gesture
 prompts, permission timer or focus requirement. Both default off each app launch.
@@ -204,7 +207,7 @@ and `/skill:force-teacher` to load it explicitly. Remove old `--manual` server a
 `mpc_search_manual`, `mpc_read_manual` and manual fields in state were removed in
 Phase 2.5. Teaching policy is in the skill; device safety remains server-enforced.
 
-The stdio smoke test exercises MCP initialization, all ten device tool definitions,
+The stdio smoke test exercises MCP initialization, all eleven device tool definitions,
 screenshots/highlights and disabled-input rejection with an empty executable PATH.
 Separate Python tests exercise synthetic import/OCR with Poppler and Tesseract,
 plus normalized search, cache reuse, corruption repair and partial-pass coverage.

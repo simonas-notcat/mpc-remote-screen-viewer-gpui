@@ -254,6 +254,7 @@ observation's crop/resize into upright protocol coordinates (never inverse-rotat
 | Tool | Additional arguments / bounds |
 | --- | --- |
 | `mpc_click` | `target: {x,y}`, `hold_ms?` (50–2000, default 100); long press uses a longer hold. Left button, or single-contact touch on touch-only devices. |
+| `mpc_double_tap` | `target: {x,y}`; two 60 ms presses separated by a 100 ms released gap, at the same point. One bounded four-edge action, not two MCP calls. Uses the same mouse/touch capability selection as click. |
 | `mpc_drag` | `start: {x,y}`, `end: {x,y}`, `duration_ms?` (100–3000, default 500); straight-line path, at most 61 bounded steps. |
 | `mpc_scroll` | `target: {x,y}`, `amount` (nonzero −120…120 signed **protocol wheel units**, not browser pixels); requires mouse capability. |
 | `mpc_press_key` | `key` (supported `input.rs` Linux wire identity), `modifiers?` (`[Shift, Control, Alt, Meta]`, default false); requires keyboard capability. |
@@ -324,14 +325,15 @@ and clear even on static screens. Screenshots/recordings never include this feed
 
 ### Phase-2 validation and remaining checks
 
-Synthetic/loopback tests cover off-by-default authorization, all five gestures
+Synthetic/loopback tests cover off-by-default authorization, all six gestures
 running under one global toggle without additional approval, off/cancel release,
 permission surviving action completion/cancellation and source changes, no old-work
 replay, local takeover ordering, framebuffer contention, capability/source rechecks,
 stale observations, deadlines, bounded paths/text, hidden text, failed-write
 uncertainty and off/on races. The original phase-2 stdio tests enumerated twelve
 tools and retained manual, image, highlight and disabled-input rejection coverage;
-phase 2.5 separates import tests and enumerates ten device tools. Decoder regressions cover
+phase 2.5 separates import tests; the subsequent double-tap addition brings
+enumeration to eleven device tools. Decoder regressions cover
 single-large/many-rectangle LZ4 workloads, off/cancel/deadline release and local
 input during decoding, release before a codec join on shutdown, human-held
 ownership during reader contention, and queued
@@ -345,6 +347,39 @@ No project edits or playback were initiated. Model/firmware metadata remained
 absent: this is narrow click-navigation evidence, not Force/manual compatibility
 or acceptance of every gesture.
 
+### Atomic double-tap: implementation and live evidence
+
+`mpc_double_tap({observation_id, target: {x, y}})` queues one gesture with four
+scheduled pointer edges at 0/60/160/220 ms: two 60 ms presses and a 100 ms released
+gap. Timing is fixed, not caller-configurable. It uses the same mouse-first,
+touch-only fallback, crop/resize mapping, local authorization, source/capability
+checks, observation consumption and cancellation/release lifecycle as click.
+Cancellation can stop between taps; it cannot undo the first tap. Partial writes
+remain uncertain and must never be automatically replayed. Separate click calls
+with state/capture round trips are not a reliable substitute.
+
+Both the viewer and stdio server must be rebuilt/restarted: the viewer handles the
+new IPC gesture variant, while the server advertises the eleventh tool. Re-enable
+MCP sharing and Allow assistance locally after restarting the viewer, and reload
+client tool discovery if necessary.
+
+After both processes were restarted and the local toggles enabled, one authorized
+live double tap on Jura's **Abandon** preset field completed all four steps with
+release written. A new screenshot showed the preset menu open. This verifies the
+observed UI result, not just socket delivery. Subsequent user-requested work used
+preset selection, Grid and Step Sequencer editing to enter bass and drum notes;
+a final Grid capture showed the eight-bar drum clip populated on three lanes.
+The user confirmed A01/A02/A03 as kick/snare/hi-hat before those lanes were used.
+No audio audition or project save was verified. Model/firmware metadata remained
+absent; this does not establish Force v3.10.1/manual compatibility.
+
+Automated coverage checks exact four-edge schedules for mouse and touch, target
+bounds and capabilities, cancellation/toggle-off/deadline stops at each unfinished
+edge, write failures (including final release-all) without replay, observation
+consumption and rotated/cropped/resized target mapping. The loopback session test
+checks both presses/releases and final release-all under the existing global
+authorization; stdio tests check eleven-tool discovery and disabled-input rejection.
+
 Desktop/MCP tests, Clippy and Rust 1.88 checks do **not** establish live rendering.
 Hands-on robot/switch/analyzer/notification/fullscreen behavior, fit/pan/rotation,
 real-network failures and native macOS/broader hardware coverage remain unverified.
@@ -353,7 +388,7 @@ Phase-1 live teaching evidence above is not phase-2 acceptance.
 ## Phase 2.5: agent-level teacher and local references
 
 Implemented on `feature/teacher-manual-separation`, stacked on phase 2. Device MCP
-now exposes **ten** tools: state, screen, highlight/clear, the five gestures and
+now exposes **eleven** tools: state, screen, highlight/clear, the six gestures and
 cancel. `mpc_search_manual` and `mpc_read_manual` are removed, as are
 `manual`/`manual_compatibility` state fields. `mpc-mcp [--socket PATH]` starts without
 a PDF, Python or Poppler. Old `--manual` arguments fail with a migration message.
@@ -463,7 +498,7 @@ than extracted content or an invented procedure. Reopen on new source evidence.
 ### Phase-2.5 acceptance and evidence
 
 - Device MCP initializes and dispatches tools with no manual and an empty PATH;
-  ten-tool enumeration, removed-tool rejection, screenshots, highlights, stale
+  eleven-tool enumeration, removed-tool rejection, screenshots, highlights, stale
   observations, disabled-input rejection and stderr-only CLI errors are tested.
 - Python tests cover faithful page bodies, printed-vs-PDF indices, version/model
   validation, small linked indexes, source-heading escaping, atomic publication,
@@ -568,7 +603,7 @@ For manual teaching, separately import the local corpus as described in phase 2.
 ### Pi configuration
 
 Pi reads project servers from `.pi/mcp.json` after project trust is granted, or
-user-level servers from `~/.pi/agent/mcp.json`. For this ten-tool device server, use
+user-level servers from `~/.pi/agent/mcp.json`. For this eleven-tool device server, use
 `"exposure": "direct"` so screenshots, highlights and gesture tools are available
 without tool search. Direct exposure does not grant device control. From the project root, after building the binaries:
 
@@ -584,7 +619,7 @@ release binary or put a shell command string in the `command` field.
 
 Start Pi in this project and approve project trust if prompted, or use `/trust`
 to grant it deliberately. After adding/changing the configuration, use `/reload`
-or restart Pi. `/mcp` should list `force-teacher` and its ten tools; after the
+or restart Pi. `/mcp` should list `force-teacher` and its eleven tools; after the
 project is trusted, `pi mcp list` also validates the connection. An untrusted
 project's `.pi/mcp.json` is intentionally ignored. No device password belongs in
 this config, and starting the MCP executable does not enable viewer sharing.

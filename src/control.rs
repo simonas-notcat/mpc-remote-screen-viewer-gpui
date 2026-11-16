@@ -45,6 +45,9 @@ pub enum Gesture {
         target: Point,
         hold_ms: u64,
     },
+    DoubleTap {
+        target: Point,
+    },
     Drag {
         start: Point,
         end: Point,
@@ -144,6 +147,33 @@ impl Plan {
                 (
                     "click",
                     format!("Click ({}, {}) · hold {hold_ms} ms", target.x, target.y),
+                    Some(target),
+                    Some(target),
+                    None,
+                    required,
+                )
+            }
+            Gesture::DoubleTap { target } => {
+                let p = target.wire(size)?;
+                let (down, up, required) = pointer_kinds(caps)?;
+                // One bounded action: two 60 ms taps separated by a 100 ms gap.
+                // Keep all four edges in the socket worker, not separate MCP calls.
+                for (at_ms, kind, held) in [
+                    (0, down, true),
+                    (60, up, false),
+                    (160, down, true),
+                    (220, up, false),
+                ] {
+                    steps.push(Step {
+                        at: Duration::from_millis(at_ms),
+                        events: vec![input::pointer(kind, 0, p, 0)],
+                        position: Some(target),
+                        held,
+                    });
+                }
+                (
+                    "double_tap",
+                    format!("Double tap ({}, {})", target.x, target.y),
                     Some(target),
                     Some(target),
                     None,

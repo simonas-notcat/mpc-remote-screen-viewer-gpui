@@ -164,6 +164,10 @@ retrieval or device access. Delete temporary page images when no longer needed.
    verify before another gesture. Queue acceptance/socket writes are not visual
    verification. Never automatically retry a mutation, including after timeout.
    If uncertain, inspect state/screen and ask rather than repeat the action.
+   For a double-tap control, use `mpc_double_tap`: it sends both taps as one
+   bounded gesture at the same target. Do not approximate it with two separate
+   `mpc_click` calls; observation/polling round trips exceed double-tap timing.
+   Poll and visually verify after the whole double tap, not between its taps.
 6. Hardware buttons, pads and encoders have no verified tools; ask the user to
    operate them. Generic keyboard keys are not hardware controls. `mpc_cancel`
    requests release, not rollback; local switches remain the stop/revocation path.
