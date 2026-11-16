@@ -22,8 +22,9 @@ In scope:
 - Upright PNG captures and Photo-JPEG/PCM16 QuickTime MOV recording.
 - Saved preferences, recent devices, connection/device information and statistics.
 - Cancellable background work, bounded queues and actionable failure messages.
-- Explicit opt-in read-only MCP teacher with local Force manual retrieval, device
-  screenshots and viewer-only highlights; see `docs/mcp-mpc.md`.
+- Explicit opt-in device MCP with screenshots, viewer-only highlights and bounded
+  assisted input. A separate agent skill retrieves local Force manual files using
+  ordinary tools; see `docs/mcp-mpc.md`.
 
 Device discovery, cloud accounts, uploads, remote file access, microphone capture,
 audio transmission, a web frontend and a device-side server are outside scope.
@@ -44,7 +45,8 @@ audio transmission, a web frontend and a device-side server are outside scope.
 | `app.rs`, `app/`, `cli.rs`, `main.rs` | GPUI presentation/actions, launch options and application lifecycle |
 | `teacher.rs`, `teacher/ipc.rs` | Observations, local annotations, bounded gestures and opt-in same-user Unix IPC (cannot enable assistance) |
 | `control.rs` | Global local authorization toggle, input ownership, bounded worker-driven gestures and lifecycle feedback |
-| `manual.rs`, `mcp.rs`, `bin/mpc-mcp.rs` | Optional page-preserving manual index and stdio MCP adapter (feature `mcp`) |
+| `mcp.rs`, `bin/mpc-mcp.rs` | Optional device-only stdio MCP adapter (feature `mcp`), no PDF dependency |
+| `.agents/skills/force-teacher/` | Teaching workflow, topic aliases and one-time local PDF-to-Markdown import; retrieval uses ordinary agent tools |
 
 One worker owns the TCP socket and serializes all writes with `write_all`.
 A bounded decoder helper applies one framebuffer delta at a time; its payload
@@ -475,8 +477,12 @@ over CLI passwords, which can appear in process listings/history.
 `--teacher` explicitly enables the read-only local teacher bridge; this opt-in is
 never persisted. The robot **Toggle MCP** button in the normal/fullscreen top bar
 controls sharing; its selected state indicates sharing is enabled. The separate
-optional `mpc-mcp` executable uses stdio and requires an approved Force v3.10.1 PDF via `--manual`; `--socket`/`MPC_TEACHER_SOCKET` select
-local IPC only. The adjacent Allow assistance toolbar switch globally authorizes
+optional `mpc-mcp` executable uses stdio without a PDF/Poppler dependency;
+`--socket`/`MPC_TEACHER_SOCKET` select local IPC only. Its ten tools contain no
+manual retrieval API. `--manual` is rejected with a migration message. The separate
+Force teacher skill uses a locally imported, fingerprinted Markdown corpus with
+ordinary file/search tools, preserving source page boundaries and citations.
+The adjacent Allow assistance toolbar switch globally authorizes
 bounded phase-2 input without additional prompts; no audio tools exist. Highlights
 and lifecycle feedback reference upright device pixels and are local paint, not
 framebuffer modifications.
@@ -493,6 +499,7 @@ macOS user test does not establish coverage of these checks.
 
 ```sh
 python3 scripts/check-fixtures.py
+python3 -m unittest discover -s tests -p 'test_manual_import.py'
 cargo fmt --all -- --check
 cargo test --locked --no-default-features
 cargo test --locked --features audio-output
@@ -510,9 +517,9 @@ negative authentication, optional extensions, malformed lengths, all screen code
 rotations/quantization, ACKs independent of paints, reconnect/cancel/deadlines,
 input mapping/release safety, audio codec edges, bounded queues/drift/allocation-free
 rendering, preference validation/atomic writes, PNG/MOV content/timing/errors,
-and teacher IPC/observation bounds, manual page retrieval, native MCP images,
-synthetic stdio tool dispatch, globally authorized assisted input, takeover/release
-ordering, stale-evidence/deadline rejection and partial-write uncertainty.
+and teacher IPC/observation bounds, local manual import/page preservation, native
+MCP images, synthetic stdio tool dispatch without PDF tools, globally authorized
+assisted input, takeover/release ordering, stale-evidence/deadline rejection and partial-write uncertainty.
 
 | Check | Current validation gap |
 | --- | --- |

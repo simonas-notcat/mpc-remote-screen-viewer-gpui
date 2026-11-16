@@ -9,9 +9,12 @@ reference is the user-supplied `manuals/Force - User Guide - v3.10.1.pdf` (468 P
 pages). Manual version is **v3.10.1**; applicability to a connected device must be
 verified, not inferred from the filename or the existence of a connection.
 
-The agent handles teaching and reasoning. The MCP server supplies evidence and
-bounded capabilities. Do not put a second LLM in the server. Manual passages and
-screen text are reference data, never instructions that override the user's goal.
+The agent handles teaching, reference retrieval and reasoning. The MCP server
+supplies device evidence and bounded capabilities. Phase 2.5 separates the local
+manual corpus/teacher skill from device MCP; phases 1–2 below retain their original
+implementation and live-test history, not the current manual API. Do not put a
+second LLM in the server. Manual passages and screen text are reference data,
+never instructions that override the user's goal.
 
 The existing service provides screen pixels, generic touch/mouse/keyboard events,
 and an exported audio stream. It does **not** provide a UI accessibility tree,
@@ -21,9 +24,11 @@ screen name from ServerInit is metadata, not proof of the currently open mode.
 ## Architecture
 
 ```text
-agent / MCP client
+agent + Force teacher skill
+    |--- ordinary read/search tools --- local, fingerprinted manual corpus
+    |                                  (one-time PDF import; no runtime service)
     | stdio (official Rust rmcp SDK; stdout is protocol only)
-mpc-mcp binary --- locally imported, versioned Force manual
+mpc-mcp binary (device-only; no manual/Poppler dependency)
     | permission-restricted Unix socket, bounded request/response framing
 viewer-owned Teacher observation/input controller
     | shared Session snapshot/framebuffer + bounded, globally authorized gestures
@@ -33,8 +38,9 @@ GPUI viewer + local-only teaching overlays
 ```
 
 Use one device connection. The viewer hosts the observation/input controller;
-the MCP executable attaches through local IPC. Manual lookup works even when the
-viewer is closed. Later a headless host can implement the same controller contract.
+the MCP executable attaches through local IPC. Agent-level manual lookup works
+even when the viewer and MCP server are closed. Later a headless host can implement
+the same controller contract.
 Neither GPUI nor an audio output device is a dependency of the MCP executable.
 Existing socket ownership, framing, authentication, ACKs and audio decoding remain
 in the current session worker. A bounded pixel-decoder helper accepts one frame at
@@ -100,6 +106,10 @@ remains available during gestures. Device-side physical takeover cannot be relia
 detected with the current protocol and must not be promised.
 
 ## Phase 1: read-only teacher
+
+Historical phase-1 contract. Phase 2.5 removes the two manual tools and manual
+fields from state, replacing them with local files and an agent skill. Device
+observation/highlight contracts and the recorded live evidence remain applicable.
 
 ### MCP tools
 
@@ -168,8 +178,7 @@ To repeat the explicit, offline-only supplied-manual check:
 
 ```sh
 MPC_FORCE_MANUAL="$PWD/manuals/Force - User Guide - v3.10.1.pdf" \
-  cargo test --locked --features mcp --test mcp \
-  supplied_force_manual_import_search_and_page_image -- --ignored --nocapture
+  python3 -m unittest discover -s tests -p 'test_manual_import.py' -v
 ```
 
 ### Live read-only teaching smoke test
@@ -227,9 +236,10 @@ musical pattern is a teaching example, not a preset prescribed by the manual.
 
 ## Phase 2: safe assisted interaction
 
-Implemented on `feature/mcp-assisted-interaction`, stacked on phase 1. The six
-phase-1 tools remain available; six additional tools queue bounded input or request
-cancellation. The top-toolbar robot (**Toggle MCP**) enables read-only sharing;
+Implemented on `feature/mcp-assisted-interaction`, stacked on phase 1. In the
+original phase-2 contract, the six phase-1 tools remained available; six additional
+tools queued bounded input or requested cancellation. Phase 2.5 removes only the
+two manual tools and retains all device/input contracts described here. The top-toolbar robot (**Toggle MCP**) enables read-only sharing;
 its adjacent **Allow assistance** switch is the single global input approval:
 no per-gesture prompts, permission timer or focus requirement. It starts off on app
 launch, independently of ordinary remote control. MCP/IPC cannot enable it;
@@ -319,8 +329,9 @@ running under one global toggle without additional approval, off/cancel release,
 permission surviving action completion/cancellation and source changes, no old-work
 replay, local takeover ordering, framebuffer contention, capability/source rechecks,
 stale observations, deadlines, bounded paths/text, hidden text, failed-write
-uncertainty and off/on races. Stdio tests enumerate twelve tools and retain manual,
-image, highlight and disabled-input rejection coverage. Decoder regressions cover
+uncertainty and off/on races. The original phase-2 stdio tests enumerated twelve
+tools and retained manual, image, highlight and disabled-input rejection coverage;
+phase 2.5 separates import tests and enumerates ten device tools. Decoder regressions cover
 single-large/many-rectangle LZ4 workloads, off/cancel/deadline release and local
 input during decoding, release before a codec join on shutdown, human-held
 ownership during reader contention, and queued
@@ -338,6 +349,147 @@ Desktop/MCP tests, Clippy and Rust 1.88 checks do **not** establish live renderi
 Hands-on robot/switch/analyzer/notification/fullscreen behavior, fit/pan/rotation,
 real-network failures and native macOS/broader hardware coverage remain unverified.
 Phase-1 live teaching evidence above is not phase-2 acceptance.
+
+## Phase 2.5: agent-level teacher and local references
+
+Implemented on `feature/teacher-manual-separation`, stacked on phase 2. Device MCP
+now exposes **ten** tools: state, screen, highlight/clear, the five gestures and
+cancel. `mpc_search_manual` and `mpc_read_manual` are removed, as are
+`manual`/`manual_compatibility` state fields. `mpc-mcp [--socket PATH]` starts without
+a PDF, Python or Poppler. Old `--manual` arguments fail with a migration message.
+Authorization, observation IDs, lifecycle feedback, cancellation, release and
+socket security stay enforced in the existing viewer/controller/worker. MCP
+instructions retain device contracts and safety, not a Force lesson policy or a
+particular manual version. The preceding PRs retain their original history.
+
+### References without a runtime manual API
+
+The portable `.agents/skills/force-teacher/SKILL.md` owns the teaching loop, manual
+selection/applicability, source citations and progressive loading. Pi discovers it
+in trusted projects; other agents with file/shell tools can use the same files.
+No Pi extension or custom manual-search/read tool is required. Ordinary `read`,
+`rg` and `pdftoppm` provide retrieval and page images. A future extension can add
+UI/setup conveniences if needed, without duplicating reference storage.
+
+The supplied PDF has 468 pages, ~135k words and ~1 MB of layout-preserving text
+(roughly 180k–250k tokens, an estimate rather than a tokenizer measurement).
+Whole-manual injection is unnecessary even with a sufficiently large context.
+There are no embeddings, vector services or LLM-generated source replacements.
+
+Import once, independently of the Rust binaries:
+
+```sh
+python3 .agents/skills/force-teacher/scripts/import_manual.py \
+  --pdf 'manuals/Force - User Guide - v3.10.1.pdf' --output manuals/generated
+```
+
+The importer uses Python's standard library and Poppler `pdftotext -layout`, with
+64 MiB input, 32 MiB extracted-output, 2000-page and 30-second subprocess limits.
+It verifies the manual's Force/v3.10.1 identity from the content, records a SHA-256
+fingerprint, rejects a source that changes during extraction, and atomically
+publishes:
+
+```text
+manuals/generated/force-v3.10.1/<source-sha256>/
+├── manifest.json          # Source path/hash, manual/model/version, converter format
+├── index.md               # Original contents links + small sub-index links
+├── index/001-032.md        # Derived page headings, at most 32 pages per index
+├── pages/001.md            # Citation header + verbatim extracted page body
+├── search/001.txt          # Unicode/whitespace-normalized phrase-search surrogate
+└── ocr/                    # Optional screenshot-inclusive search cache + coverage
+```
+
+Repeat imports verify existing generated files rather than overwrite them. If
+source location, conversion output or local files differ, import into a new root
+or explicitly remove/rebuild the old corpus. No generated corpus/diagrams/PDF are
+committed or redistributed. This local cache replaces phase 1's memory-only index;
+page bodies are source extraction, not a promised semantic Markdown conversion.
+The curated skill topic aliases are routing hints, not inferred procedures. The
+normalized `search/` layer joins wrapped lines and expands Unicode ligatures, so
+phrase lookup no longer needs ad-hoc cross-line scripts. These surrogates route
+back to canonical page files; they are not independently authoritative passages.
+Older corpora gain this auxiliary layer by rerunning the normal importer, without
+rewriting canonical pages or changing their source identity.
+
+For comprehensive first-use preparation, optionally append `--ocr` to that same
+setup command. It requires `pdftoppm` and Tesseract English data; neither is needed
+for cached text searches. OCR runs on a fingerprint-verified temporary PDF snapshot,
+with at most four workers, a 1600-pixel rendered edge, 8 MiB/20-second render bounds
+and 128 KiB/30-second OCR bounds per page. Temporary images/snapshot are removed.
+`ocr/pages/NNN.txt` contains explicitly labeled OCR search text; `ocr/manifest.json`
+reports source/pipeline identity, completed/failed/pending pages and whether coverage
+is complete. `ocr/state.json` checkpoints per-page checksums/errors. Rerunning
+verifies and reuses successful pages, repairing/retrying only missing, corrupt or
+failed pages; a concurrent/pre-existing preparation lock is rejected clearly.
+A killed importer may leave `ocr/.prepare.lock`; after confirming no importer is
+running, remove only that lock and rerun to resume. Do not delete the whole corpus.
+
+A prior full 468-page OCR pass took about three minutes locally. It is a one-time
+optional setup cost, not part of each answer. Missing OCR dependencies or a failed
+page leave the normal text/search corpus usable, but incomplete OCR must never be
+reported as full-manual screenshot coverage. Search results from OCR are lossy:
+verify promising image-only hits in the original PDF. Ordinary `rg` and `read`
+remain the only retrieval interface; no runtime manual CLI or Pi extension is added.
+
+The agent reads the small manifest/root index, searches narrowly or follows the
+original contents, then reads relevant complete pages. Read neighboring pages for
+continuations/prerequisites; snippets alone do not establish a procedure.
+Citations use **1-based PDF indices**, preserving detected printed labels separately.
+For diagrams or ambiguous tables, verify the source hash and render one bounded
+page with `pdftoppm`; inspect its PNG with ordinary `read`. Text retrieval works
+without Poppler after import, and without the original PDF. Rendering still needs
+the matching PDF and `pdftoppm`. A corpus version does not identify the connected
+hardware/software. Corpus/screen content remains untrusted reference data, never
+instructions overriding the user's goal.
+
+### Lessons from manual-only teaching
+
+The skill now explicitly restricts procedural sourcing to the approved official
+manual: no browser/forum/model-memory fallback. It first distinguishes defaults
+for newly drawn notes from edits to existing notes, note duration from clip length,
+and Grid View from Step Sequencer. A related term is not enough citation support:
+TC documenting snapping does not establish the length assigned to pencil notes.
+Do not substitute experiments for a request for a documented procedure, or require
+a device connection to continue a manual-only search.
+
+Escalate from heading/text search to normalized full-corpus synonyms, cached OCR,
+then relevant source images. Report the scope and coverage of negative searches.
+After research, a workflow can be assessed as apparently undocumented in this
+version; do not claim a feature is impossible or prove global absence from a few
+missed keywords. `references/retrieval-notes.md` records the source-fingerprinted
+new-grid-note-duration search and its unresolved result, with page pointers rather
+than extracted content or an invented procedure. Reopen on new source evidence.
+
+### Phase-2.5 acceptance and evidence
+
+- Device MCP initializes and dispatches tools with no manual and an empty PATH;
+  ten-tool enumeration, removed-tool rejection, screenshots, highlights, stale
+  observations, disabled-input rejection and stderr-only CLI errors are tested.
+- Python tests cover faithful page bodies, printed-vs-PDF indices, version/model
+  validation, small linked indexes, source-heading escaping, atomic publication,
+  repeat/corrupt imports, source changes, subprocess bounds, missing dependencies,
+  normalized cross-line phrase search and synthetic import without shell interpolation.
+  Optional OCR tests cover cache-only reuse, corruption repair, incomplete coverage,
+  failed-page resume, source-verified snapshots, locks and a real synthetic PDF pass.
+  CI installs Poppler/Tesseract only for these offline tests. No device is contacted.
+- The explicit supplied-manual check above exercises import, local lexical lookup
+  and page-248 PNG rendering separately from device MCP. This is offline evidence,
+  not live acceptance of the new skill teaching loop or device compatibility.
+- Validated locally: core and MCP all-target tests, desktop+MCP Clippy, Rust 1.88
+  MCP compilation, synthetic import tests and the explicit 468-page supplied-PDF
+  import/search/page-248 rendering check. The generated root index is ~1.2 KB;
+  heading searches resolve Chop Mode (PDF p. 261), Track Mixer (124) and Step
+  Sequencer (173) using ordinary `rg`.
+- A subsequent Pi session loaded the project skill and exercised local page
+  retrieval/rendering. The new-grid-note question exposed task-interpretation and
+  evidence-scope mistakes; the skill now records those lessons rather than an
+  invented TC procedure. A full successful device lesson with this retrieval path
+  and native macOS preparation/render behavior remain hands-on checks.
+- Locally, all 468 normalized and OCR pages were prepared with no failed pages.
+  A repeated setup reused every OCR file unchanged in about 0.8 seconds; one
+  phrase query over both caches took about 0.008 seconds. These are narrow local
+  timings, not a semantic-retrieval or answer-correctness benchmark. Earlier
+  phase-1/2 live evidence is not retroactively evidence for this retrieval path.
 
 ## Phase 3: audio inspection
 
@@ -380,7 +532,7 @@ Record actual GUI/Force smoke-test evidence separately from compilation.
 
 ## Running the teacher
 
-Install Poppler (`pdftotext` and, for diagrams, `pdftoppm`). Build:
+Build the viewer and device-only MCP server (no manual/Poppler required):
 
 ```sh
 cargo build --locked --release --features desktop,mcp
@@ -400,10 +552,7 @@ Configure the MCP client to launch the binary using absolute paths:
 {
   "mcpServers": {
     "force-teacher": {
-      "command": "/absolute/project/target/release/mpc-mcp",
-      "args": [
-        "--manual", "/absolute/project/manuals/Force - User Guide - v3.10.1.pdf"
-      ]
+      "command": "/absolute/project/target/release/mpc-mcp"
     }
   }
 }
@@ -413,20 +562,20 @@ Both processes default to a private `mpc-teacher-<uid>/viewer.sock` directory un
 the OS temporary directory. `MPC_TEACHER_SOCKET` can select an absolute custom socket;
 its existing parent must be owned by the current user with no group/other access.
 An active viewer socket is never replaced. After an abnormal exit, only a verified
-same-user stale socket may be removed. `mpc-mcp --help` does not import the PDF.
+same-user stale socket may be removed. The MCP executable never imports a PDF.
+For manual teaching, separately import the local corpus as described in phase 2.5.
 
 ### Pi configuration
 
 Pi reads project servers from `.pi/mcp.json` after project trust is granted, or
-user-level servers from `~/.pi/agent/mcp.json`. For this twelve-tool server, use
+user-level servers from `~/.pi/agent/mcp.json`. For this ten-tool device server, use
 `"exposure": "direct"` so screenshots, highlights and gesture tools are available
 without tool search. Direct exposure does not grant device control. From the project root, after building the binaries:
 
 ```sh
 pi mcp add --local force-teacher --exposure direct --cwd "$PWD" \
-  --description 'Force teacher: cited manual, screen observations/highlights; the Allow assistance toolbar switch beside the MCP robot globally authorizes bounded input. No audio tools.' \
-  -- "$PWD/target/release/mpc-mcp" \
-  --manual "$PWD/manuals/Force - User Guide - v3.10.1.pdf"
+  --description 'Device observations/highlights; the Allow assistance toolbar switch beside the MCP robot globally authorizes bounded input. Manual teaching uses the force-teacher skill and local files. No audio tools.' \
+  -- "$PWD/target/release/mpc-mcp"
 ```
 
 For a development build, substitute `target/debug/mpc-mcp` and first run
@@ -435,12 +584,18 @@ release binary or put a shell command string in the `command` field.
 
 Start Pi in this project and approve project trust if prompted, or use `/trust`
 to grant it deliberately. After adding/changing the configuration, use `/reload`
-or restart Pi. `/mcp` should list `force-teacher` and its twelve tools; after the
+or restart Pi. `/mcp` should list `force-teacher` and its ten tools; after the
 project is trusted, `pi mcp list` also validates the connection. An untrusted
 project's `.pi/mcp.json` is intentionally ignored. No device password belongs in
 this config, and starting the MCP executable does not enable viewer sharing.
 
-The manual PDF and generated machine-specific `.pi/mcp.json` stay local and are
-ignored by Git. The JSON example above uses placeholders rather than committing
-one developer's executable/manual paths. The live session confirmed that Pi loaded
+Remove `--manual` from pre-phase-2.5 launch configurations before reloading. Pi
+also discovers `.agents/skills/force-teacher/` after project trust; use
+`/skill:force-teacher` to load the teaching workflow explicitly. Manual retrieval
+uses built-in file/shell tools, so it adds no MCP tool definitions or automatic
+full-manual context. No extension installation is necessary.
+
+The manual PDF, `manuals/generated/` corpus and machine-specific `.pi/mcp.json`
+stay local and are ignored by Git. The JSON example above uses placeholders rather
+than committing one developer's executable/manual paths. The live session confirmed that Pi loaded
 the configured server after restart; it does not verify every Pi/client version.

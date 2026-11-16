@@ -4,4 +4,6 @@
 
 # User-supplied reference material and machine-specific MCP launch paths.
 /manuals/*.pdf
+/manuals/generated/
+__pycache__/
 /.pi/mcp.json

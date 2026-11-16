@@ -24,8 +24,9 @@ Synthetic test data lives in `tests/fixtures/`.
 - Device Info panel, live FPS/bandwidth and bounded network-rate history graphs.
 - Saved viewer settings and a bounded recent-device picker; passwords are never saved.
 - Saved default screenshot folder with first-use folder selection.
-- Optional stdio MCP Force teacher (read-only by default): local manual search/page images,
-  device observations, viewer-only highlights and locally approved assisted gestures.
+- Optional device-only stdio MCP (read-only by default): observations, viewer-only
+  highlights and locally approved assisted gestures. A separate Force teacher skill
+  retrieves local, page-preserving manual files with ordinary agent tools.
 - Device audio: PCM16, IMA ADPCM and predictive/Rice decoding, bounded
   playback, cubic rate conversion, drift correction and discontinuity fades.
 - Lazy output-device/rate/buffer selection, saved audio preferences, square-law
@@ -114,23 +115,45 @@ Do not point automated tests at a real MPC without authorization.
 ## AI teacher (MCP, read-only by default)
 
 See [`docs/mcp-mpc.md`](docs/mcp-mpc.md) for the architecture, phased plan,
-full tool contracts and MCP-client configuration. State/screen capture, Force manual
-search/read and local highlights work in read-only mode. Phase 2 adds bounded
+full tool contracts and MCP-client configuration. Device state/screen capture and
+local highlights work in read-only mode. Manual retrieval and teaching live in the
+[Force teacher skill](.agents/skills/force-teacher/SKILL.md), not MCP. Phase 2 adds bounded
 click/long-press, drag, scroll, key and ASCII-text input, plus cancellation.
 The top toolbar has one robot-icon **Toggle MCP** button for sharing. While enabled,
 an adjacent **Allow assistance** switch grants global input permission: no per-gesture
 prompts, permission timer or focus requirement. Both default off each app launch.
 No audio tools exist.
 
-Supply `manuals/Force - User Guide - v3.10.1.pdf` locally and install Poppler
-(`pdftotext`; `pdftoppm` for diagram/page images). The manual is indexed in memory;
-no cloud indexing or extracted-manual files are created.
+The device MCP server needs **no manual, Python or Poppler**. For teaching, supply
+`manuals/Force - User Guide - v3.10.1.pdf` locally and import once with Python 3.9+ and
+Poppler `pdftotext`:
+
+```sh
+python3 .agents/skills/force-teacher/scripts/import_manual.py \
+  --pdf 'manuals/Force - User Guide - v3.10.1.pdf' --output manuals/generated
+```
+
+The script prints a fingerprinted corpus path containing `manifest.json`, a small
+`index.md`, linked page-heading indexes, verbatim Markdown page bodies and a
+`search/` layer that joins wrapped lines/normalizes Unicode for fast phrase lookup.
+For optional comprehensive first-use preparation, append `--ocr` (requires
+`pdftoppm` and Tesseract English data). This caches searchable screenshot text and
+coverage under `ocr/`; verified pages are reused, interrupted/failed pages resume,
+and no rendered images are retained. A prior 468-page OCR pass took about three
+minutes locally; subsequent searches are ordinary file reads, not repeated OCR.
+
+Agents use ordinary `read`/`rg` tools; `pdftoppm` also renders individual diagrams.
+OCR/normalized text are search aids, not replacements for the cited source pages.
+No runtime manual CLI, embeddings, cloud indexing or full-manual context injection.
+PDF and generated files remain local and ignored by Git. Manual-only questions
+need neither MCP nor a running viewer. The skill uses only the approved official
+manual for instructions and records scoped research gaps rather than guessing.
 
 ```sh
 cargo build --locked --release --features desktop,mcp
 ./target/release/mpc-remote-screen-viewer-gpui --teacher
 # Configure your MCP client to launch this stdio server (use absolute paths):
-./target/release/mpc-mcp --manual '/absolute/path/Force - User Guide - v3.10.1.pdf'
+./target/release/mpc-mcp
 ```
 
 Click the robot icon in the top toolbar (tooltip **Toggle MCP**) to enable
@@ -165,20 +188,27 @@ Highlights have a distinct AI-teacher label, follow fit/pan/rotation, expire wit
 cannot annotate a replaced/reconfigured/disconnected device. Manual compatibility
 is explicitly unverified until the agent/user confirms model and software version.
 
-Core/MCP tests use synthetic pixels and manuals, never a real device:
+Core/MCP/import tests use synthetic pixels and manuals, never a real device:
 
 ```sh
+python3 -m unittest discover -s tests -p 'test_manual_import.py'
 cargo test --locked --features mcp
 cargo clippy --locked --features desktop,mcp --all-targets -- -D warnings
 ```
 
 For Pi, use the [project-local setup instructions](docs/mcp-mpc.md#pi-configuration)
 with direct tool exposure, then trust the project and reload/restart Pi. Keep the
-manual PDF and machine-specific `.pi/mcp.json` local; both are ignored by Git.
+manual PDF, `manuals/generated/` corpus and machine-specific `.pi/mcp.json` local;
+all are ignored by Git. Pi discovers `.agents/skills/force-teacher/`; use `/reload`
+and `/skill:force-teacher` to load it explicitly. Remove old `--manual` server args:
+`mpc_search_manual`, `mpc_read_manual` and manual fields in state were removed in
+Phase 2.5. Teaching policy is in the skill; device safety remains server-enforced.
 
-The stdio smoke test exercises MCP initialization, all twelve tool definitions,
-disabled-input rejection and PDF page rendering when Poppler is available
-(required in the MCP CI job). Loopback tests cover globally authorized gesture writes,
+The stdio smoke test exercises MCP initialization, all ten device tool definitions,
+screenshots/highlights and disabled-input rejection with an empty executable PATH.
+Separate Python tests exercise synthetic import/OCR with Poppler and Tesseract,
+plus normalized search, cache reuse, corruption repair and partial-pass coverage.
+Loopback tests cover globally authorized gesture writes,
 cancellation, takeover and reconfiguration; **phase-2 GUI/Force effects remain
 unverified**. A prior phase-1 live Pi session exercised its six tools; the user confirmed the overlay appeared
 and completed a one-bar techno pattern through guided, user-performed input.

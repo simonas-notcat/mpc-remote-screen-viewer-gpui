@@ -1,9 +1,8 @@
-//! Real stdio MCP smoke test. Synthetic PDF/pixels; no device connection or audio.
+//! Real stdio MCP smoke test. Synthetic pixels; no PDF, device connection or audio.
 #![cfg(all(feature = "mcp", unix))]
 use base64::{Engine, engine::general_purpose::STANDARD};
 use mpc_remote_screen_viewer_gpui::{
     framebuffer::Framebuffer,
-    manual::DOCUMENT_ID,
     protocol::{Bounds, DeviceInfo, FrameUpdate, PixelFormat, Rectangle, ServerInit},
     session::{Snapshot, State},
     teacher::{Bridge, Rect},
@@ -37,54 +36,6 @@ impl Drop for TestDirectory {
     }
 }
 
-/// Minimal genuine PDF, containing only synthetic reference text.
-fn write_pdf(path: &Path) {
-    let pages = [
-        "Force User Guide\nManual Version v3.10.1",
-        "Sample Edit\nUse Chop Mode to slice a drum loop.\n2",
-        "Mixer\nAdjust volume and pan.\n3",
-    ];
-    let mut objects = vec![
-        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R] /Count 3 >>".into(),
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
-    ];
-    for (index, text) in pages.into_iter().enumerate() {
-        let stream = format!(
-            "BT /F1 12 Tf 20 370 Td 18 TL {} ET",
-            text.lines()
-                .map(|line| format!("({line}) Tj T*"))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-        objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>", 5 + index * 2));
-        objects.push(format!(
-            "<< /Length {} >>\nstream\n{stream}\nendstream",
-            stream.len()
-        ));
-    }
-    let mut pdf = b"%PDF-1.4\n".to_vec();
-    let mut offsets = Vec::new();
-    for (index, object) in objects.iter().enumerate() {
-        offsets.push(pdf.len());
-        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
-    }
-    let xref = pdf.len();
-    pdf.extend_from_slice(
-        format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
-    );
-    for offset in offsets {
-        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
-    }
-    pdf.extend_from_slice(
-        format!(
-            "trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
-            objects.len() + 1
-        )
-        .as_bytes(),
-    );
-    fs::write(path, pdf).unwrap();
-}
 struct McpProcess {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -93,10 +44,10 @@ struct McpProcess {
     next_id: u64,
 }
 impl McpProcess {
-    fn start(manual: &Path, socket: &Path) -> Self {
+    fn start(socket: &Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_mpc-mcp"))
-            .arg("--manual")
-            .arg(manual)
+            // Prove that initialization and all device tools need no Poppler/external tools.
+            .env("PATH", "")
             .arg("--socket")
             .arg(socket)
             .stdin(Stdio::piped())
@@ -201,76 +152,32 @@ fn synthetic_source() -> Arc<Mutex<Snapshot>> {
     }))
 }
 #[test]
-fn stdio_initialize_manual_images_screen_and_local_highlight_when_poppler_available() {
-    if !Command::new("pdftotext")
-        .arg("-v")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-    {
-        eprintln!(
-            "Skipping external Poppler smoke test; install Poppler. The MCP CI job requires it."
-        );
-        return;
-    }
+fn stdio_device_tools_work_without_manual_or_external_tools() {
     let dir = TestDirectory::new();
-    let pdf = dir.0.join("synthetic.pdf");
-    write_pdf(&pdf);
     let socket = dir.0.join("viewer.sock");
-    let mut client = McpProcess::start(&pdf, &socket);
+    let mut client = McpProcess::start(&socket);
     let init = client.rpc("initialize", json!({"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}));
     assert_eq!(init["result"]["serverInfo"]["name"], "mpc-mcp", "{init}");
     assert!(
         init["result"]["instructions"]
             .as_str()
             .unwrap()
-            .contains("read-only teacher")
+            .contains("read-only by default")
     );
     client.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
     let tools = client.rpc("tools/list", json!({}));
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 12);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 10);
     let state = client.tool("mpc_get_state", json!({}));
     assert_eq!(state["structuredContent"]["viewer_available"], false);
-    assert_eq!(state["structuredContent"]["manual"]["pdf_pages"], 3);
-    let search = client.tool("mpc_search_manual", json!({"query": "chop drum loop"}));
-    assert_eq!(search["structuredContent"]["results"][0]["pdf_page"], 2);
-    let read = client.tool(
-        "mpc_read_manual",
-        json!({"document_id": DOCUMENT_ID, "start_page": 2}),
-    );
+    assert!(state["structuredContent"].get("manual").is_none());
     assert!(
-        read["structuredContent"]["pages"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("Chop Mode")
+        state["structuredContent"]
+            .get("manual_compatibility")
+            .is_none()
     );
-    assert_eq!(
-        client.tool(
-            "mpc_read_manual",
-            json!({"document_id": DOCUMENT_ID, "start_page": 0})
-        )["isError"],
-        true
-    );
-    if Command::new("pdftoppm")
-        .arg("-v")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-    {
-        let read = client.tool(
-            "mpc_read_manual",
-            json!({"document_id": DOCUMENT_ID, "start_page": 2, "include_image": true}),
-        );
-        let image = read["content"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|c| c["type"] == "image")
-            .unwrap();
-        let bytes = STANDARD.decode(image["data"].as_str().unwrap()).unwrap();
-        assert!(image::load_from_memory(&bytes).is_ok());
+    for name in ["mpc_search_manual", "mpc_read_manual"] {
+        let removed = client.rpc("tools/call", json!({"name": name, "arguments": {}}));
+        assert!(removed.get("error").is_some() || removed["result"]["isError"] == true);
     }
     let bridge = Bridge::start(socket).unwrap();
     bridge.teacher().set_source(Some(synthetic_source()));
@@ -347,51 +254,6 @@ fn stdio_initialize_manual_images_screen_and_local_highlight_when_poppler_availa
     assert!(mutation.get("error").is_some() || mutation["result"]["isError"] == true);
 }
 
-/// Explicit local validation only; the copyrighted user manual is not a fixture.
-#[test]
-#[ignore = "set MPC_FORCE_MANUAL to the approved Force v3.10.1 PDF"]
-fn supplied_force_manual_import_search_and_page_image() {
-    let manual = std::env::var_os("MPC_FORCE_MANUAL")
-        .expect("Set MPC_FORCE_MANUAL to the approved PDF path");
-    let dir = TestDirectory::new();
-    let mut client = McpProcess::start(Path::new(&manual), &dir.0.join("absent-viewer.sock"));
-    let init = client.rpc("initialize", json!({"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "manual-check", "version": "1"}}));
-    assert!(init.get("error").is_none(), "{init}");
-    client.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
-    let state = client.tool("mpc_get_state", json!({}));
-    let meta = &state["structuredContent"]["manual"];
-    assert_eq!(meta["pdf_pages"], 468);
-    assert_eq!(meta["manual_version"], "v3.10.1");
-    assert_eq!(meta["sha256"].as_str().unwrap().len(), 64);
-    for query in ["Chop Mode", "Track Mixer", "Remote Screen"] {
-        let result = client.tool("mpc_search_manual", json!({"query": query, "limit": 3}));
-        let hits = result["structuredContent"]["results"].as_array().unwrap();
-        assert!(!hits.is_empty());
-        eprintln!(
-            "{query}: {}",
-            hits.iter()
-                .map(|h| h["citation"].as_str().unwrap())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-    let page = client.tool(
-        "mpc_read_manual",
-        json!({"document_id": DOCUMENT_ID, "start_page": 248, "include_image": true}),
-    );
-    assert_ne!(page["isError"], true, "{page}");
-    let image = page["content"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["type"] == "image")
-        .unwrap();
-    let decoded =
-        image::load_from_memory(&STANDARD.decode(image["data"].as_str().unwrap()).unwrap())
-            .unwrap();
-    assert_eq!(decoded.width().max(decoded.height()), 1400);
-}
-
 #[test]
 fn help_needs_neither_manual_nor_viewer_and_invalid_cli_is_stderr_only() {
     let help = Command::new(env!("CARGO_BIN_EXE_mpc-mcp"))
@@ -403,6 +265,17 @@ fn help_needs_neither_manual_nor_viewer_and_invalid_cli_is_stderr_only() {
         String::from_utf8(help.stdout)
             .unwrap()
             .contains("read-only")
+    );
+    let removed = Command::new(env!("CARGO_BIN_EXE_mpc-mcp"))
+        .args(["--manual", "nonexistent.pdf"])
+        .output()
+        .unwrap();
+    assert!(!removed.status.success());
+    assert!(removed.stdout.is_empty());
+    assert!(
+        String::from_utf8(removed.stderr)
+            .unwrap()
+            .contains("agent skill")
     );
     let invalid = Command::new(env!("CARGO_BIN_EXE_mpc-mcp"))
         .arg("--unknown")

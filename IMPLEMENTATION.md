@@ -16,7 +16,7 @@ provides build instructions and user-facing workflows.
 | Device audio | PCM16, IMA ADPCM and predictive/Rice decoding; source-index queue/markers, cubic resampling, drift correction, prefill/fades/trims. Lazy CPAL device/rate/buffer selection, saved settings, square-law volume and peak meters. A1/A2 hardware checks remain. |
 | Audio analyzer | Spectrum, 2D spectrogram, projected waterfall, peak-preserving waveform, optional stereo density cloud and source peak/RMS meters. Bounded best-effort worker and source-time histories; display settings persist. |
 | Recording | Background 66 ms dirty capture, quality-80 Photo-JPEG and optional source PCM16 MOV, co64 offsets, fixed upright canvas, bounded audio queue, explicit limits/errors and finalization. Synthetic container/codec tests; R1 device/macOS checks remain. |
-| MCP teacher (phases 1–2) | Optional rmcp stdio executable; Force v3.10.1 manual, private opt-in observations/highlights, plus bounded assisted gestures authorized by one global toolbar switch beside the MCP robot (no timer, focus reset or per-gesture approval). Worker-owned execution/release and local feedback; synthetic/loopback tests. Phase-1 live teaching succeeded; phase-2 GUI/Force effects remain unverified. No audio tools. See `docs/mcp-mpc.md`. |
+| Device MCP + teacher skill (phases 1–2.5) | Optional device-only rmcp stdio executable; separate local Force v3.10.1 corpus/agent skill using ordinary file tools. Private opt-in observations/highlights, plus bounded assisted gestures authorized by one global toolbar switch beside the MCP robot (no timer, focus reset or per-gesture approval). Worker-owned execution/release and local feedback; synthetic/loopback tests. Phase-1 live teaching succeeded; phase-2 GUI/Force effects remain unverified. No audio tools. See `docs/mcp-mpc.md`. |
 | Preferences | Atomic app-scoped viewer/screenshot/audio JSON; bounded recent-device picker, default screenshot folder, control/FPS restoration and analyzer display state. Passwords and held input are never saved. |
 | Information/statistics | Read-only Device Info, live FPS/bandwidth and 120-interval network-rate graphs with core/loopback tests. |
 | Packaging | macOS plist and native/universal development-bundle script. User testing on macOS succeeded; bundle creation, permissions, signing and universal output remain unverified. |
@@ -85,11 +85,21 @@ not rotation/PNG encoding. Local teaching rectangles map crop/resize coordinates
 back to upright device pixels and are painted in the existing canvas, never into
 captures/recordings. They clear on expiry, disconnection/reconfiguration or revocation.
 
-The optional MCP executable has no GPUI/output-device dependency. Poppler import
-keeps page-separated text and a bounded lexical passage index in memory, retaining
-citations, printed labels and a PDF fingerprint. Optional page rendering and import
-have subprocess deadlines/output limits. Manual tools work without the viewer.
-MCP advertises twelve tools. Overlay writes are local non-destructive mutations;
+The optional MCP executable has no GPUI/output-device, PDF or Poppler dependency.
+MCP advertises ten device tools. Phase 2.5 removes its two manual tools and manual
+state fields. Teaching and reference retrieval live in the portable
+`.agents/skills/force-teacher/` skill. Its one-time Python/Poppler import verifies
+Force/v3.10.1 identity, fingerprints the PDF and atomically publishes local,
+gitignored Markdown page files with citations, printed labels and small linked
+indexes. A separate normalized `search/` layer handles wrapped phrases. Optional
+`--ocr` preparation uses Poppler/Tesseract once, with per-page checksums, coverage,
+atomic checkpoints and bounded workers; missing/failed/corrupt pages resume while
+verified pages are reused. Workers render a fingerprint-verified PDF snapshot;
+no page images persist. Agents use ordinary read/search tools; OCR is a lossy
+routing aid and image-only hits must be verified against the source PDF. There is no runtime manual CLI, extension, embedding service or
+full-manual prompt injection. Cached text works without the viewer/server/PDF or
+Poppler. Rendering needs the matching source PDF; the skill requires a hash check.
+Overlay writes are local non-destructive mutations;
 input tools are honestly annotated as potentially destructive, non-idempotent
 mutations. While MCP is enabled, its adjacent **Allow assistance** switch is the
 single global input approval. It is hidden/reset when MCP is off; enabling MCP
@@ -116,10 +126,17 @@ Non-interactive cursor, held ring, actual drag
 path, signed scroll feedback and hidden-content key/text labels remain outside
 captures/recordings and below modal UI.
 
-Synthetic stdio tests cover MCP initialization/tool dispatch, manual search/read,
-page PNGs, rotated/downscaled screen captures, highlights/clear, stale-source
-rejection and disabled-input rejection. IPC/unit tests cover permission/framing
-bounds, active/stale sockets, observation TTL, fit/pan transforms, overlay-free
+Synthetic stdio tests cover MCP initialization/tool dispatch with an empty PATH
+and no PDF, rotated/downscaled screen captures, highlights/clear, stale-source
+rejection, removed-tool rejection and disabled-input rejection. Separate Python
+tests cover source identity, page bodies/citations, linked indexes, input/output/
+time bounds, atomic/idempotent publication, normalized cross-line search, corrupt
+caches, source changes, synthetic import/OCR, offline cache reuse and partial OCR
+retries. The teacher skill enforces official-manual-only sourcing, distinguishes
+new-note defaults from existing-note edits, and preserves scoped retrieval notes
+instead of treating missing search matches or related TC text as a verified answer. The explicit supplied-manual check validates all 468 pages,
+lexical lookup and page-248 PNG rendering offline; it is not live skill acceptance.
+IPC/unit tests cover permission/framing bounds, active/stale sockets, observation TTL, fit/pan transforms, overlay-free
 captures, authorization/deadlines, consumed observations and failed-write uncertainty.
 Loopback session tests cover all five gestures under one global toggle without
 additional approval, off/cancel release, framebuffer contention, local takeover,
@@ -134,8 +151,8 @@ visually verified; broader phase-2 live rendering/input acceptance remains open.
 Two separately authorized live MPC menu-navigation clicks were visually verified;
 see `docs/mcp-mpc.md` for the limited evidence.
 
-A subsequent live Pi session exercised all six tools against the running viewer,
-including a manual page image and user-confirmed on-screen guidance. The user
+Before phase 2.5, a live Pi session exercised all six phase-1 tools against the
+running viewer, including a manual page image and user-confirmed on-screen guidance. The user
 completed a one-bar 128 BPM drum pattern with DrumSynth:Multi / Deep House, while
 the agent checked successive screenshots. Pad identities were established by the
 user's audition reports, not agent audio analysis or an assumed universal mapping.
@@ -182,7 +199,8 @@ and standard IMA ADPCM tables without hardware or networking. Rust tests consume
 mock optionally supplies a quiet PCM16 tone; it is not real-device validation.
 
 CI runs on Ubuntu and covers stable Rust formatting/tests/Clippy, optional
-audio output and an MCP job with Poppler for the synthetic stdio/PDF smoke test.
+audio output, device MCP stdio tests without external tools, and separate offline
+Python import tests. The MCP job installs Poppler only for synthetic PDF import.
 Rust 1.88 checks cover core tests plus audio-output and MCP compilation. Desktop
 builds are not covered by CI. Linux/aarch64 desktop builds, Clippy and help smoke
 checks have been performed during development; they do not establish

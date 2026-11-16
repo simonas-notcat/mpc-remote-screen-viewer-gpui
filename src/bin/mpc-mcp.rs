@@ -9,20 +9,15 @@ async fn main() {
 }
 #[cfg(unix)]
 async fn run() -> Result<(), String> {
-    use mpc_remote_screen_viewer_gpui::{manual::Manual, mcp::TeacherServer, teacher};
+    use mpc_remote_screen_viewer_gpui::{mcp::TeacherServer, teacher};
     use rmcp::ServiceExt;
     use std::path::PathBuf;
 
-    let mut manual = None;
     let mut socket = teacher::default_socket_path();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--manual" => {
-                manual = Some(PathBuf::from(
-                    args.next().ok_or("--manual requires a PDF path")?,
-                ))
-            }
+            "--manual" => return Err("--manual was removed: use the force-teacher agent skill and local Markdown corpus; the device server needs no PDF".into()),
             "--socket" => {
                 socket = PathBuf::from(
                     args.next()
@@ -31,7 +26,7 @@ async fn run() -> Result<(), String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Force teacher MCP server (read-only by default)\n\nUsage: mpc-mcp --manual '/absolute/path/Force - User Guide - v3.10.1.pdf' [--socket PATH]\n\nRequires Poppler pdftotext (pdftoppm for page images).\nManual tools work offline. For screen/highlight tools enable the robot button (Toggle MCP) in the viewer's top toolbar.\nSocket defaults to MPC_TEACHER_SOCKET or the viewer's private per-user temporary socket.\nThe adjacent Allow assistance switch globally enables device input: no permission timer or per-gesture approvals. Switch it off or toggle MCP off to cancel/release. No audio tools. Never retry uncertain mutations. Screens/manual excerpts may be sent to your configured model."
+                    "Device MCP server (read-only by default)\n\nUsage: mpc-mcp [--socket PATH]\n\nNo manual or Poppler dependency. Use the force-teacher agent skill for local reference retrieval. For screen/highlight tools enable the robot button (Toggle MCP) in the viewer's top toolbar.\nSocket defaults to MPC_TEACHER_SOCKET or the viewer's private per-user temporary socket.\nThe adjacent Allow assistance switch globally enables device input: no permission timer or per-gesture approvals. Switch it off or toggle MCP off to cancel/release. No audio tools. Never retry uncertain mutations. Requested screens may be sent to your configured model."
                 );
                 return Ok(());
             }
@@ -41,9 +36,7 @@ async fn run() -> Result<(), String> {
     if !socket.is_absolute() {
         return Err("--socket must be absolute".into());
     }
-    let path = manual.ok_or("--manual is required; use --help")?;
-    let manual = Manual::load_force(&path)?;
-    let server = TeacherServer::new(manual, socket)
+    let server = TeacherServer::new(socket)
         .serve(rmcp::transport::stdio())
         .await
         .map_err(|e| e.to_string())?;
