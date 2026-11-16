@@ -1,5 +1,6 @@
-//! One cancellable worker per session. It alone owns the socket and serializes writes.
+//! One socket owner serializes writes; a bounded decoder keeps pixel work off its loop.
 //! Snapshots replace presentation state; framebuffer deltas are never dropped.
+mod decoder;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
     collections::VecDeque,
@@ -8,7 +9,7 @@ use std::{
     sync::{
         Arc, Mutex, OnceLock, RwLock,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, SyncSender, TryRecvError},
+        mpsc::{self, Receiver, SyncSender},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -18,10 +19,10 @@ use zeroize::Zeroizing;
 use crate::{
     audio::Audio,
     auth::Credentials,
+    control::{Controller, Running},
     framebuffer::{DEFAULT_FRAME_PIXEL_BUDGET, Framebuffer},
     protocol::{
-        self, Assembler, AuthResult, DeviceInfo, FrameUpdate, Hello, InputEvent, Kind, Message,
-        ServerInit,
+        self, Assembler, AuthResult, DeviceInfo, Hello, InputEvent, Kind, Message, ServerInit,
     },
 };
 
@@ -163,6 +164,7 @@ pub enum Command {
 
 pub struct Session {
     snapshot: Arc<Mutex<Snapshot>>,
+    control: Arc<Controller>,
     audio: Arc<Audio>,
     commands: SyncSender<Command>,
     cancel: Arc<AtomicBool>,
@@ -176,6 +178,8 @@ impl Session {
         let state = snapshot.clone();
         let audio = Arc::new(Audio::default());
         let sink = audio.clone();
+        let control = Arc::new(Controller::default());
+        let input_control = control.clone();
         let stop = cancel.clone();
         let worker = thread::Builder::new()
             .name("remote-screen-session".into())
@@ -190,11 +194,13 @@ impl Session {
                     state,
                     stop,
                     commands: receiver,
+                    control: input_control,
                 };
                 worker.run();
             })?;
         Ok(Self {
             snapshot,
+            control,
             audio,
             commands,
             cancel,
@@ -203,6 +209,10 @@ impl Session {
     }
     pub fn audio(&self) -> Arc<Audio> {
         self.audio.clone()
+    }
+    /// Shared input arbitration; only the local global toggle enables assistance.
+    pub fn control(&self) -> Arc<Controller> {
+        self.control.clone()
     }
     /// Shared latest state for read-only background consumers (recording/teacher).
     pub fn snapshot_source(&self) -> Arc<Mutex<Snapshot>> {
@@ -220,6 +230,7 @@ impl Session {
     }
     /// Signal cancellation immediately; join/drop may then run off the UI thread.
     pub fn request_stop(&self) {
+        self.control.revoke("Session stopped locally");
         self.cancel.store(true, Ordering::Release);
         self.audio.set_enabled(false);
     }
@@ -252,6 +263,7 @@ struct Worker {
     audio_on: bool,
     statistics_clock: Instant,
     streaming_since: Option<Instant>,
+    control: Arc<Controller>,
 }
 impl Worker {
     fn cancelled(&self) -> bool {
@@ -337,6 +349,7 @@ impl Worker {
         snapshot.revision = snapshot.revision.wrapping_add(1);
     }
     fn attempt(&mut self) -> Result<(), SessionError> {
+        self.control.disconnected();
         let addresses = resolve(
             &self.config.host,
             self.config.port,
@@ -383,6 +396,8 @@ impl Worker {
             .map_err(|e| SessionError::Protocol(format!("Invalid screen description: {e}")))?;
         let mut audio_available = init.audio_available;
         let mut image = self.configure(init)?;
+        let mut decoder = decoder::Decoder::start()
+            .map_err(|e| SessionError::Local(format!("Could not start frame decoder: {e}")))?;
         wire.send(protocol::options(self.fps))?;
         self.audio.set_enabled(self.audio_on && audio_available);
         if self.audio_on && audio_available {
@@ -394,53 +409,23 @@ impl Worker {
         let mut last_message = clock;
         let mut last_ping = clock;
         let mut ping_token = None;
+        let mut running = None;
+        let mut input_caps = self
+            .state
+            .lock()
+            .unwrap()
+            .screen
+            .as_ref()
+            .map_or(0, |s| s.input_capabilities);
         let result = (|| {
             while !self.cancelled() {
-                // Bound command work per iteration so incoming ACKs/liveness cannot starve.
-                for _ in 0..128 {
-                    match self.commands.try_recv() {
-                        Ok(Command::Refresh) => {
-                            wire.send(Message::new(Kind::RequestFullRefresh, []))?
-                        }
-                        Ok(Command::FrameRate(fps)) => {
-                            self.fps = fps.min(120);
-                            wire.send(protocol::options(self.fps))?;
-                        }
-                        Ok(Command::Audio(on)) => {
-                            self.audio_on = on;
-                            self.audio.set_enabled(on && audio_available);
-                            self.audio.reset();
-                            if audio_available {
-                                wire.send(protocol::audio_control(on))?;
-                            }
-                        }
-                        Ok(Command::Input { screen, events }) => {
-                            if Arc::ptr_eq(&screen, &image) {
-                                let caps = self
-                                    .state
-                                    .lock()
-                                    .unwrap()
-                                    .screen
-                                    .as_ref()
-                                    .map_or(0, |s| s.input_capabilities);
-                                let events: Vec<_> = events
-                                    .into_iter()
-                                    .filter(|e| match e.kind {
-                                        0..=2 => caps & 1 != 0,
-                                        3..=6 => caps & 2 != 0,
-                                        7 => caps != 0,
-                                        8..=9 => caps & 4 != 0,
-                                        _ => false,
-                                    })
-                                    .collect();
-                                for message in InputEvent::messages(&events)? {
-                                    wire.send(message)?;
-                                }
-                            }
-                        }
-                        Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
-                    }
-                }
+                self.service_commands(
+                    &mut wire,
+                    &image,
+                    input_caps,
+                    audio_available,
+                    &mut running,
+                )?;
                 if last_ping.elapsed() >= self.config.timing.ping {
                     let token = clock.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
                     wire.send(protocol::token(Kind::Ping, token))?;
@@ -459,6 +444,12 @@ impl Worker {
                 last_message = Instant::now();
                 match message.kind {
                     Kind::ServerInit => {
+                        self.control.cancel();
+                        self.control
+                            .drive(&mut running, &image, input_caps, |events| {
+                                send_input(&mut wire, events)
+                            })?;
+                        self.control.disconnected();
                         // Reconfiguration invalidates every held input and queued old-screen command.
                         for message in InputEvent::messages(&[InputEvent::RELEASE_ALL]).unwrap() {
                             wire.send(message)?;
@@ -469,6 +460,7 @@ impl Worker {
                         self.audio.set_enabled(false);
                         self.audio.reset();
                         audio_available = init.audio_available;
+                        input_caps = init.input_capabilities;
                         image = self.configure(init)?;
                         self.audio.set_enabled(self.audio_on && audio_available);
                         if self.audio_on && audio_available {
@@ -476,30 +468,26 @@ impl Worker {
                         }
                     }
                     Kind::FrameUpdate => {
-                        let frame = FrameUpdate::parse(&message.payload)?;
+                        decoder.submit(image.clone(), message.payload)?;
                         let report = loop {
-                            if self.cancelled() {
-                                return Err(SessionError::Cancelled);
-                            }
-                            match image.try_write() {
-                                Ok(mut framebuffer) => {
-                                    break framebuffer
-                                        .apply_unless(&frame, || self.cancelled())
-                                        .ok_or(SessionError::Cancelled)?;
-                                }
-                                Err(std::sync::TryLockError::WouldBlock) => thread::sleep(POLL),
-                                Err(std::sync::TryLockError::Poisoned(_)) => {
-                                    return Err(SessionError::Local(
-                                        "Framebuffer lock failed".into(),
-                                    ));
-                                }
+                            // Neither a framebuffer reader nor a single slow codec/conversion
+                            // may delay local takeover, assistance Stop, or held-input release.
+                            self.service_commands(
+                                &mut wire,
+                                &image,
+                                input_caps,
+                                audio_available,
+                                &mut running,
+                            )?;
+                            if let Some(report) = decoder.receive(POLL)? {
+                                break report;
                             }
                         };
-                        // ACK is independent of presentation scheduling and skipped rectangles.
-                        wire.send(protocol::ack(frame.id))?;
+                        // One complete delta at a time; ACK only after successful application.
+                        wire.send(protocol::ack(report.id))?;
                         self.publish(|s| {
                             s.revision = s.revision.wrapping_add(1);
-                            s.statistics.processed_frame(frame.quality, report.skipped);
+                            s.statistics.processed_frame(report.quality, report.skipped);
                         });
                     }
                     Kind::Ping => wire.send(protocol::token(
@@ -549,6 +537,9 @@ impl Worker {
             }
             Ok(())
         })();
+        decoder.request_stop();
+        drop(running); // Interrupted writes remain explicitly uncertain, never retried.
+        self.control.disconnected();
         self.audio.set_enabled(false);
         if self.audio_on && audio_available && self.cancelled() {
             let _ = wire.send(protocol::audio_control(false));
@@ -560,15 +551,77 @@ impl Worker {
             .screen
             .as_ref()
             .map_or(0, |screen| screen.input_capabilities);
-        if self.cancelled() && input_capabilities != 0 {
-            // Best effort while the socket is still usable, before it is dropped.
+        if input_capabilities != 0 {
+            // Best effort on every exit, not an input acknowledgement or a retry.
             let _ = wire.send(
                 InputEvent::messages(&[InputEvent::RELEASE_ALL])
                     .unwrap()
                     .remove(0),
             );
         }
+        // Release on the socket BEFORE joining even a non-interruptible codec call.
+        drop(decoder);
         result
+    }
+    /// Shared by the normal streaming loop and every wait for pixel decoding.
+    fn service_commands(
+        &mut self,
+        wire: &mut Wire,
+        image: &Arc<RwLock<Framebuffer>>,
+        caps: u8,
+        audio_available: bool,
+        running: &mut Option<Running>,
+    ) -> Result<(), SessionError> {
+        // Bound work so a busy producer cannot starve incoming ACKs/liveness.
+        for _ in 0..128 {
+            if self.cancelled() {
+                return Err(SessionError::Cancelled);
+            }
+            let command = self.commands.try_recv().ok();
+            let events: Vec<_> = match &command {
+                Some(Command::Input { screen, events }) if Arc::ptr_eq(screen, image) => events
+                    .iter()
+                    .copied()
+                    .filter(|e| match e.kind {
+                        0..=2 => caps & 1 != 0,
+                        3..=6 => caps & 2 != 0,
+                        7 => caps != 0,
+                        8..=9 => caps & 4 != 0,
+                        _ => false,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            // Admit human takeover BEFORE advancing an agent step, including queued work.
+            if !events.is_empty() {
+                self.control.local_input(&events);
+            }
+            self.control
+                .drive(running, image, caps, |events| send_input(wire, events))?;
+            match command {
+                Some(Command::Refresh) => wire.send(Message::new(Kind::RequestFullRefresh, []))?,
+                Some(Command::FrameRate(fps)) => {
+                    self.fps = fps.min(120);
+                    wire.send(protocol::options(self.fps))?;
+                }
+                Some(Command::Audio(on)) => {
+                    self.audio_on = on;
+                    self.audio.set_enabled(on && audio_available);
+                    self.audio.reset();
+                    if audio_available {
+                        wire.send(protocol::audio_control(on))?;
+                    }
+                }
+                Some(Command::Input { .. }) => {
+                    if !events.is_empty() {
+                        send_input(wire, &events)?;
+                        self.control.local_written();
+                    }
+                }
+                None => break,
+            }
+        }
+        Ok(())
     }
     fn configure(&self, init: ServerInit) -> Result<Arc<RwLock<Framebuffer>>, SessionError> {
         let mut framebuffer = Framebuffer::new(init.clone())?;
@@ -618,6 +671,12 @@ impl Worker {
         }
         Err(SessionError::Cancelled)
     }
+}
+fn send_input(wire: &mut Wire, events: &[InputEvent]) -> Result<(), SessionError> {
+    for message in InputEvent::messages(events)? {
+        wire.send(message)?;
+    }
+    Ok(())
 }
 struct Wire {
     stream: TcpStream,
@@ -830,6 +889,94 @@ fn connect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_human_input_cancels_agent_before_its_first_socket_write() {
+        use crate::{
+            control::{Gesture, Phase, Point},
+            input,
+            protocol::PixelFormat,
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let mut wire = Wire {
+            stream,
+            assembler: Assembler::default(),
+            pending: VecDeque::new(),
+        };
+        let mut reader = Wire {
+            stream: peer,
+            assembler: Assembler::default(),
+            pending: VecDeque::new(),
+        };
+        let image = Arc::new(RwLock::new(
+            Framebuffer::new(ServerInit {
+                width: 2,
+                height: 2,
+                rotation: 0,
+                pixel_format: PixelFormat([32, 16, 8, 8, 8, 0, 8]),
+                name: "synthetic".into(),
+                input_capabilities: 7,
+                audio_available: false,
+            })
+            .unwrap(),
+        ));
+        let control = Arc::new(Controller::default());
+        control.set_enabled(true);
+        control
+            .submit(
+                &image,
+                7,
+                (2, 2),
+                Gesture::Click {
+                    target: Point { x: 1, y: 1 },
+                    hold_ms: 100,
+                },
+                control.epoch(),
+                Instant::now() + Duration::from_secs(60),
+            )
+            .unwrap();
+        let keys = input::Control::default().key("a", [false; 4]);
+        let (send, commands) = mpsc::sync_channel(128);
+        send.send(Command::Input {
+            screen: image.clone(),
+            events: keys.clone(),
+        })
+        .unwrap();
+        let mut worker = Worker {
+            config: Config::new(
+                "127.0.0.1",
+                listener.local_addr().unwrap().port(),
+                String::new(),
+            )
+            .unwrap(),
+            state: Arc::new(Mutex::new(Snapshot::default())),
+            stop: Arc::new(AtomicBool::new(false)),
+            commands,
+            fps: 0,
+            audio: Arc::new(Audio::default()),
+            audio_on: false,
+            statistics_clock: Instant::now(),
+            streaming_since: None,
+            control: control.clone(),
+        };
+        worker
+            .service_commands(&mut wire, &image, 7, false, &mut None)
+            .unwrap();
+        let message = reader.poll().unwrap().unwrap();
+        assert_eq!(message.kind, Kind::Input);
+        assert_eq!(InputEvent::parse_batch(&message.payload).unwrap(), keys);
+        assert!(reader.poll().unwrap().is_none()); // No agent down or release was written.
+        let status = control.status();
+        assert!(status.enabled);
+        assert!(!status.human_held);
+        let feedback = status.feedback.unwrap();
+        assert_eq!(feedback.phase, Phase::Cancelled);
+        assert_eq!(feedback.written_steps, 0);
+    }
 
     #[test]
     fn network_backoff_is_exponential_jittered_capped_and_overflow_safe() {

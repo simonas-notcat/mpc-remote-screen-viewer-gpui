@@ -33,7 +33,7 @@ audio transmission, a web frontend and a device-side server are outside scope.
 | Module | Responsibility |
 | --- | --- |
 | `protocol.rs`, `auth.rs` | Bounded framing/parsing, message serialization and password proofs |
-| `session.rs` | Socket ownership, connection lifecycle, commands, ACKs and metadata |
+| `session.rs`, `session/decoder.rs` | Socket ownership, responsive input scheduling, one-job pixel decoding, connection lifecycle, ordered ACKs and metadata |
 | `framebuffer.rs`, `viewport.rs` | Rectangle decoding/composition, upright images and viewing transforms |
 | `input.rs` | Linux wire-key mapping and button/modifier/contact bookkeeping |
 | `audio.rs`, `playout.rs`, `audio_output.rs` | Device decoding, bounded source-clock playback and optional CPAL output |
@@ -42,14 +42,20 @@ audio transmission, a web frontend and a device-side server are outside scope.
 | `statistics.rs`, `information.rs` | Per-attempt rates/history and read-only device details |
 | `preferences.rs`, `preferences/viewer.rs` | Versioned JSON preferences and bounded recent-device history |
 | `app.rs`, `app/`, `cli.rs`, `main.rs` | GPUI presentation/actions, launch options and application lifecycle |
-| `teacher.rs`, `teacher/ipc.rs` | Read-only observations, expiring local annotations and opt-in same-user Unix IPC |
+| `teacher.rs`, `teacher/ipc.rs` | Observations, local annotations, bounded gestures and opt-in same-user Unix IPC (cannot enable assistance) |
+| `control.rs` | Global local authorization toggle, input ownership, bounded worker-driven gestures and lifecycle feedback |
 | `manual.rs`, `mcp.rs`, `bin/mpc-mcp.rs` | Optional page-preserving manual index and stdio MCP adapter (feature `mcp`) |
 
 One worker owns the TCP socket and serializes all writes with `write_all`.
-Framebuffer deltas are applied in order, while presentation snapshots replace
-older presentation state. ACKs must not depend on GUI paints or recording speed.
-Audio output, analysis, recording, image preparation and settings writes have
-separate background work; none may create an unbounded backlog.
+A bounded decoder helper applies one framebuffer delta at a time; its payload
+is moved, not copied. ACK only after application completes, never after enqueue.
+While decoding or waiting for pixel readers, the socket owner continues servicing
+human input and agent cancellation/deadlines at 50 ms intervals. It admits local
+takeover before advancing an agent step and releases input before joining the
+decoder on teardown. Pixel work cannot occupy the input-scheduling thread.
+Presentation snapshots replace older presentation state. ACKs must not depend on
+GUI paints or recording speed. Audio output, analysis, recording, image preparation
+and settings writes have separate background work; none may create an unbounded backlog.
 
 Audio callbacks must not allocate, wait for a producer, or perform filesystem,
 network or JPEG work. Playback-lock contention produces initialized silence and
@@ -282,6 +288,44 @@ or forwarding device keyboard input. Focus loss, dialogs, disable, configuration
 changes and disconnect release held input and clear local bookkeeping. Queue
 overload stops the session rather than silently losing a release transition.
 
+### Assisted MCP input (phase 2)
+
+The top-toolbar robot button (tooltip **Toggle MCP**) enables read-only sharing.
+Only while enabled, its adjacent **Allow assistance** switch grants global input
+permission. Both default off on launch; toggling MCP off resets/hides the switch,
+cancels work and requests release. MCP alone never enables input. There are no
+per-gesture prompts, permission timer or focus requirements. Permission stays on
+across Settings, focus changes, local takeover, disconnect/reconnect and screen
+reconfiguration; explicit off, sharing
+disable or app shutdown ends authorization. It is not persisted. IPC cannot enable
+it; unknown arguments such as `confirmed` remain rejected. Generic input is potentially
+destructive, not semantically classified as safe, and must stay within the user's task.
+
+Input tools queue one gesture directly while enabled. Queue/execution deadlines are
+5 seconds, capped by observation expiry; these do not expire global permission.
+Click holds are 50–2000 ms; straight drags 100–3000 ms / at most 61 steps; scroll is
+nonzero −120…120 wire units; text is 1–64 printable US ASCII characters. Capabilities
+and source identity are checked before construction/execution. Each gesture references
+a fresh observation, mapped from returned-image crop/resize into upright coordinates.
+Pre-action/in-action observations cannot authorize subsequent gestures.
+
+The worker alone schedules input, records actual socket-written steps and releases
+on completion/cancel. Partial writes are uncertain and never retried. Socket writes
+are not device acknowledgements or visual verification. Source changes cancel old
+work without resetting authorization; old gestures are never replayed. Human input
+cancels/releases the agent's whole gesture before being sent, with held/in-flight
+human input blocking new agent gestures. Physical takeover cannot be detected.
+
+Switching assistance or MCP off cancels work and requests release. `mpc_cancel`
+stops only the current gesture and leaves authorization on. One control pair is
+shown in the normal top toolbar or fullscreen top strip, never duplicated in
+menus/status bars or an additional bottom bar. Workspace clipping prevents
+analyzer/notification layers from covering the normal toolbar. Local feedback shows
+queued/running/completed/rejected/cancelled/uncertain states, actual cursor/held/path/
+release, signed wheel amounts and non-sensitive key/text labels, without
+intercepting input or appearing in captures/recordings. See `docs/mcp-mpc.md`
+for contracts and remaining live acceptance checks.
+
 ## 8. Device audio and analysis
 
 AudioControl is two bytes: enabled and codec mask **`0x07`**. Do not send it unless
@@ -344,7 +388,13 @@ while connected. Provide labeled address/password/port fields, masked password
 with show/hide, recent devices, clear attempt status and cancellation. Hide
 editable credentials during an attempt/session. Capture actions move into overflow
 at small widths instead of wrapping. Settings has General, Audio and Streaming
-tabs, releases remote input, confines focus and closes with Escape.
+tabs, releases held local remote-control input, confines focus and closes with Escape.
+The icon-only **Toggle MCP** robot is always in the top toolbar. Its adjacent
+**Allow assistance** switch is visible only while MCP is enabled. Keep this pair
+available at the top in fullscreen; never duplicate it in menus, status bars or a
+bottom control bar. Sizing/capture actions move into overflow at narrow widths to
+reserve space for MCP. These controls are independent of Settings and manual
+remote control. Opening/closing Settings or moving focus never resets permission.
 
 Preferences are app-scoped JSON under `mpc-remote-screen-viewer-rs/` in macOS
 Application Support or Linux `$XDG_CONFIG_HOME` (fallback `~/.config`). This legacy
@@ -423,13 +473,14 @@ password. Help exits without loading settings. Prefer masked UI/environment inpu
 over CLI passwords, which can appear in process listings/history.
 
 `--teacher` explicitly enables the read-only local teacher bridge; this opt-in is
-never persisted. The View menu and a visible indicator (also in fullscreen) can
-disable sharing. The separate optional `mpc-mcp` executable uses stdio and requires
-an approved Force v3.10.1 PDF via `--manual`; `--socket`/`MPC_TEACHER_SOCKET` select
-local IPC only. No remote input, audio or device changes are exposed in phase 1.
-Highlights reference bounded/expiring upright observations and are local paint,
-not framebuffer modifications. Full security/tool/gesture contracts and later
-phases are in `docs/mcp-mpc.md`.
+never persisted. The robot **Toggle MCP** button in the normal/fullscreen top bar
+controls sharing; its selected state indicates sharing is enabled. The separate
+optional `mpc-mcp` executable uses stdio and requires an approved Force v3.10.1 PDF via `--manual`; `--socket`/`MPC_TEACHER_SOCKET` select
+local IPC only. The adjacent Allow assistance toolbar switch globally authorizes
+bounded phase-2 input without additional prompts; no audio tools exist. Highlights
+and lifecycle feedback reference upright device pixels and are local paint, not
+framebuffer modifications.
+Full security/tool/gesture contracts and later phases are in `docs/mcp-mpc.md`.
 
 `scripts/bundle-macos.sh` creates a development `.app` with its own bundle identity,
 Local Network usage explanation and ad-hoc signing. `--universal` builds Apple
@@ -459,8 +510,9 @@ negative authentication, optional extensions, malformed lengths, all screen code
 rotations/quantization, ACKs independent of paints, reconnect/cancel/deadlines,
 input mapping/release safety, audio codec edges, bounded queues/drift/allocation-free
 rendering, preference validation/atomic writes, PNG/MOV content/timing/errors,
-and read-only teacher IPC/observation bounds, manual page retrieval, native MCP
-images and synthetic stdio tool dispatch.
+and teacher IPC/observation bounds, manual page retrieval, native MCP images,
+synthetic stdio tool dispatch, globally authorized assisted input, takeover/release
+ordering, stale-evidence/deadline rejection and partial-write uncertainty.
 
 | Check | Current validation gap |
 | --- | --- |
@@ -474,6 +526,7 @@ images and synthetic stdio tool dispatch.
 | C1 | Preference restoration, recent selection, startup precedence and quit/error paths lack detailed macOS interaction validation. |
 | S1 | Inspector/graphs/scrolling/input occlusion lack detailed macOS validation. |
 | T1 | Basic live Pi teaching and user-confirmed highlight visibility succeeded. Fullscreen/revocation/reconfiguration and macOS teacher IPC still need hands-on tests; absent device model/firmware prevents exact manual compatibility confirmation. Playback captures can return `Framebuffer busy; retry`; bounded capture backoff is not automatic. |
+| T2 | Phase-2 assisted control has synthetic/loopback and desktop compile/lint coverage only. Actual Force effects and live robot/assistance/fullscreen/fit/pan/rotation rendering remain unverified; phase-1 teaching evidence is not phase-2 acceptance. |
 
 User-reported testing has succeeded on macOS and Omarchy Linux. Earlier
 connection, remote-control and screenshot-folder smoke tests also succeeded.

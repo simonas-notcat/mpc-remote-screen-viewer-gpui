@@ -60,6 +60,12 @@ const ICONS: &[(&str, &str)] = &[
     ),
     ("pointer", icon!(r#"<path d="m5 3 14 9-7 1-3 7Z"/>"#)),
     (
+        "robot",
+        icon!(
+            r#"<path d="M12 3v3"/><rect x="4" y="6" width="16" height="15" rx="3"/><path d="M4 11H2v6h2m16-6h2v6h-2M9 17h6"/><circle cx="9" cy="11" r="1"/><circle cx="15" cy="11" r="1"/>"#
+        ),
+    ),
+    (
         "volume",
         icon!(r#"<path d="M11 4 6 8H3v8h3l5 4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/>"#),
     ),
@@ -193,6 +199,7 @@ mod tests {
             assert!(data.starts_with(b"<svg"));
             assert!(data.ends_with(b"</svg>"));
         }
+        assert!(Assets.load("icons/robot.svg").unwrap().is_some());
         assert!(Assets.load("icons/analyzer.svg").unwrap().is_some());
         assert!(Assets.load("icons/waveform.svg").unwrap().is_some());
         assert!(Assets.load("../secret").unwrap().is_none());

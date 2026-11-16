@@ -229,7 +229,7 @@ fn stdio_initialize_manual_images_screen_and_local_highlight_when_poppler_availa
     );
     client.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
     let tools = client.rpc("tools/list", json!({}));
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 6);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 12);
     let state = client.tool("mpc_get_state", json!({}));
     assert_eq!(state["structuredContent"]["viewer_available"], false);
     assert_eq!(state["structuredContent"]["manual"]["pdf_pages"], 3);
@@ -310,6 +310,27 @@ fn stdio_initialize_manual_images_screen_and_local_highlight_when_poppler_availa
     );
     client.tool("mpc_clear_highlight", json!({}));
     assert!(bridge.teacher().overlay().is_none());
+    // Tools are available, but enabling screen sharing never authorizes input.
+    for (name, args) in [
+        ("mpc_click", json!({"target": {"x": 1, "y": 1}})),
+        (
+            "mpc_drag",
+            json!({"start": {"x": 1, "y": 1}, "end": {"x": 2, "y": 2}}),
+        ),
+        (
+            "mpc_scroll",
+            json!({"target": {"x": 1, "y": 1}, "amount": 1}),
+        ),
+        ("mpc_press_key", json!({"key": "enter"})),
+        ("mpc_type_text", json!({"text": "Synthetic"})),
+    ] {
+        let mut args = args;
+        args["observation_id"] = json!(observation);
+        let result = client.tool(name, args);
+        assert_eq!(result["isError"], true, "{name}: {result}");
+        assert!(result.to_string().contains("Read-only"), "{name}: {result}");
+    }
+    assert_eq!(client.tool("mpc_cancel", json!({}))["isError"], true);
     bridge.teacher().set_source(None);
     assert_eq!(
         client.tool(

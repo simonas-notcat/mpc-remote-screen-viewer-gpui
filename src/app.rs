@@ -18,6 +18,7 @@ use mpc_remote_screen_viewer_gpui::{
     audio,
     audio_output::{self, AudioOutput},
     cli::Launch,
+    control::Status as TeacherControlStatus,
     information,
     input::{self, Control},
     playout::{DEFAULT_TARGET_BUFFER_MS, MAX_TARGET_BUFFER_MS, MIN_TARGET_BUFFER_MS, peak_db},
@@ -72,7 +73,7 @@ actions!(
         RemoteControl,
         PlayAudio,
         AudioAnalyzer,
-        AiTeacher,
+        ToggleMcp,
         AudioSettings,
         DeviceInformation,
         Recording,
@@ -130,7 +131,6 @@ pub fn register_actions(cx: &mut App) {
                 MenuItem::action("Remote Control (F12)", RemoteControl),
                 MenuItem::action("Play Device Audio", PlayAudio),
                 MenuItem::action("Audio Analyzer", AudioAnalyzer),
-                MenuItem::action("AI Teacher (read only)", AiTeacher),
                 MenuItem::action("Audio Settings…", AudioSettings),
             ],
         },
@@ -149,6 +149,8 @@ pub struct Viewer {
     snapshot: Snapshot,
     teacher: Option<TeacherBridge>,
     teacher_highlight: Option<TeacherHighlight>,
+    teacher_control: Option<TeacherControlStatus>,
+    assistance_on: bool,
     viewer_settings: preferences::ViewerSettings,
     settings_writer: Option<preferences::ViewerSettingsWriter>,
     settings_error: Option<String>,
@@ -425,6 +427,8 @@ impl Viewer {
             snapshot: Snapshot::default(),
             teacher: None,
             teacher_highlight: None,
+            teacher_control: None,
+            assistance_on: false,
             settings_writer: writer.ok(),
             settings_error,
             generation: 0,
@@ -472,7 +476,7 @@ impl Viewer {
                 .or(analyzer_error),
         };
         if launch.teacher {
-            viewer.toggle_teacher(&AiTeacher, window, cx);
+            viewer.toggle_mcp(&ToggleMcp, window, cx);
         }
         viewer
     }
@@ -589,6 +593,21 @@ impl Viewer {
             .and_then(|bridge| bridge.teacher().overlay());
         if highlight != self.teacher_highlight {
             self.teacher_highlight = highlight;
+            cx.notify();
+        }
+        let control = self
+            .teacher
+            .as_ref()
+            .and_then(|b| b.teacher().control())
+            .map(|c| c.status());
+        let animate = control
+            .as_ref()
+            .and_then(|s| s.feedback.as_ref())
+            .is_some_and(|f| {
+                f.phase.active() || f.visible_until.is_some_and(|until| until > Instant::now())
+            });
+        if control != self.teacher_control || animate {
+            self.teacher_control = control;
             cx.notify();
         }
         let session = self.session.as_ref()?;
@@ -749,10 +768,9 @@ impl Viewer {
                     session
                         .audio()
                         .set_analyzer(self.analyzer.as_ref().map(|a| a.input.clone()));
+                    session.control().set_enabled(self.assistance_on);
                     if let Some(teacher) = &self.teacher {
-                        teacher
-                            .teacher()
-                            .set_source(Some(session.snapshot_source()));
+                        teacher.teacher().set_session(&session);
                     }
                     self.session = Some(session);
                     self.connection_address = Some(address);
@@ -850,7 +868,7 @@ impl Viewer {
         cx.notify();
     }
     fn release_input(&mut self, cx: &mut Context<Self>) {
-        if self.capabilities() != 0 {
+        if self.capabilities() != 0 && self.control.is_held() {
             self.send_input(vec![InputEvent::RELEASE_ALL], cx);
         }
         self.control.clear();
@@ -1391,6 +1409,10 @@ impl Viewer {
     fn screen(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let image = self.image.clone();
         let highlight = self.teacher_highlight.clone();
+        let feedback = self
+            .teacher_control
+            .as_ref()
+            .and_then(|s| s.feedback.clone());
         let size = self
             .snapshot
             .screen
@@ -1424,6 +1446,9 @@ impl Viewer {
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
                 if view.control_on {
                     let held = view.control.touch || view.control.buttons.iter().any(|v| *v);
+                    if !held && view.assistance_on {
+                        return; // Hover alone is not takeover; press/scroll/key or Stop is.
+                    }
                     if let Some(p) = view.pointer_position(event.position, held)
                         && view.control.last != Some(p)
                     {
@@ -1502,6 +1527,16 @@ impl Viewer {
                         if let (Some(image), Some(picture)) = (image, picture) {
                             let _ =
                                 window.paint_image(picture, Corners::default(), image, 0, false);
+                            if let Some(feedback) = feedback {
+                                teacher::paint_feedback(
+                                    &feedback,
+                                    picture,
+                                    canvas_bounds,
+                                    size,
+                                    window,
+                                    cx,
+                                );
+                            }
                             if let Some(highlight) = highlight {
                                 teacher::paint_highlight(
                                     &highlight,
@@ -1581,7 +1616,7 @@ impl Render for Viewer {
             .on_action(cx.listener(Self::play_audio))
             .on_action(cx.listener(Self::audio_settings))
             .on_action(cx.listener(Self::toggle_analyzer))
-            .on_action(cx.listener(Self::toggle_teacher))
+            .on_action(cx.listener(Self::toggle_mcp))
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, window, cx| {
                 if event.pressed_button != Some(MouseButton::Left) {
                     view.resizing_analyzer = false;
@@ -1627,35 +1662,17 @@ impl Render for Viewer {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
+                    // Workspace panels/toasts must not cover the MCP toolbar controls.
+                    .overflow_hidden()
                     .child(content)
-                    .when_some(information_panel, |this, panel| this.child(panel)),
+                    .when_some(information_panel, |this, panel| this.child(panel))
+                    .when(self.analyzer.is_some(), |this| {
+                        this.child(self.analyzer_panel(cx))
+                    })
+                    .child(notifications),
             )
-            .when(fullscreen, |this| {
-                this.child(
-                    div().absolute().top_2().right_2().occlude().child(
-                        Button::new("exit-fullscreen")
-                            .label("Exit fullscreen · Esc / F11")
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.exit_fullscreen(&ExitFullscreen, window, cx)
-                            })),
-                    ),
-                )
-            })
-            .when(fullscreen && self.teacher.is_some(), |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .top_2()
-                        .left_2()
-                        .occlude()
-                        .child(self.teacher_indicator(cx)),
-                )
-            })
-            .when(self.analyzer.is_some(), |this| {
-                this.child(self.analyzer_panel(cx))
-            })
+            .when(fullscreen, |this| this.child(self.fullscreen_controls(cx)))
             .when_some(status_bar, |this, bar| this.child(bar))
-            .child(notifications)
             .children(dialogs)
     }
 }

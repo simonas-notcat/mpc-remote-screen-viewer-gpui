@@ -9,14 +9,14 @@ provides build instructions and user-facing workflows.
 | Area | Status |
 | --- | --- |
 | Protocol/authentication | Bounded protocol-v2 framing and all 16 message types; PBKDF2/HMAC proofs, OS nonces and constant-time server-proof checking. Synthetic fixtures and fragmented/coalesced-message tests. |
-| Session | Background socket worker, serialized writes, bounded commands, cancellable connection/retry, typed terminal failures, exponential jittered network backoff, deadlines, liveness, ACKs, options and metadata. Loopback-tested. |
+| Session | Background socket owner plus a one-job pixel decoder; serialized writes and responsive input/release during slow decoding or reader contention. Bounded commands, cancellable connection/retry, typed failures, backoff, deadlines, liveness, ordered ACKs, options and metadata. Loopback-tested. |
 | Screen | Raw/LZ4/Zstd/solid/JPEG decoding, persistent delta composition, pixel conversion/quantization, four upright rotations, safe reconfiguration, allocation and aggregate decode budgets. |
 | GPUI workspace | Connection card, responsive toolbar, modal General/Audio/Streaming settings, status/notifications, fit/actual size, pan, fullscreen, native menu/dialog integration and background PNG captures. User-reported testing succeeded on macOS and Omarchy Linux; detailed V1 interaction checks remain open. |
 | Remote control | Capability-gated mouse/wheel, touch-only single-contact emulation, US/Linux key mappings, modifiers, synthesized Shift, local shortcut precedence and release-all safety. Core/loopback tests plus user-reported device smoke test; broader K1 checks remain. |
 | Device audio | PCM16, IMA ADPCM and predictive/Rice decoding; source-index queue/markers, cubic resampling, drift correction, prefill/fades/trims. Lazy CPAL device/rate/buffer selection, saved settings, square-law volume and peak meters. A1/A2 hardware checks remain. |
 | Audio analyzer | Spectrum, 2D spectrogram, projected waterfall, peak-preserving waveform, optional stereo density cloud and source peak/RMS meters. Bounded best-effort worker and source-time histories; display settings persist. |
 | Recording | Background 66 ms dirty capture, quality-80 Photo-JPEG and optional source PCM16 MOV, co64 offsets, fixed upright canvas, bounded audio queue, explicit limits/errors and finalization. Synthetic container/codec tests; R1 device/macOS checks remain. |
-| MCP teacher (phase 1) | Optional `mpc-mcp` stdio executable using rmcp; in-memory Force v3.10.1 manual retrieval/page images, read-only viewer observations, private opt-in Unix IPC and expiring local guidance. Synthetic tests plus a successful live Pi lesson with user-confirmed overlays/user-performed input; model/firmware metadata unavailable. No remote-input/audio tools. See `docs/mcp-mpc.md`. |
+| MCP teacher (phases 1–2) | Optional rmcp stdio executable; Force v3.10.1 manual, private opt-in observations/highlights, plus bounded assisted gestures authorized by one global toolbar switch beside the MCP robot (no timer, focus reset or per-gesture approval). Worker-owned execution/release and local feedback; synthetic/loopback tests. Phase-1 live teaching succeeded; phase-2 GUI/Force effects remain unverified. No audio tools. See `docs/mcp-mpc.md`. |
 | Preferences | Atomic app-scoped viewer/screenshot/audio JSON; bounded recent-device picker, default screenshot folder, control/FPS restoration and analyzer display state. Passwords and held input are never saved. |
 | Information/statistics | Read-only Device Info, live FPS/bandwidth and 120-interval network-rate graphs with core/loopback tests. |
 | Packaging | macOS plist and native/universal development-bundle script. User testing on macOS succeeded; bundle creation, permissions, signing and universal output remain unverified. |
@@ -31,7 +31,11 @@ provides build instructions and user-facing workflows.
   30 s; authentication/protocol/local failures remain visible for explicit retry.
 - Framebuffers cap decoded allocation at 64 MiB. Decode/composite work defaults
   to a per-update budget of 64 Mi rectangle pixels, including failed attempts.
-  Skipped/empty updates are ACKed without needless image conversion.
+  One decoder helper accepts only one in-flight payload, moved without copying;
+  deltas are applied in order and ACKed only after completion, including skipped/
+  empty updates. While waiting, the socket owner services input/Stop/deadlines at
+  50 ms intervals. Human takeover is admitted before advancing agent input. On
+  teardown, socket release precedes joining even a non-interruptible codec call.
 - Presentation keeps the latest image/state rather than queued repaint jobs.
   Framebuffer identity/content revision and session generation guards reject stale
   images. Old GPU images are evicted; RGBA-to-GPUI-BGRA preparation is off-thread.
@@ -68,11 +72,13 @@ provides build instructions and user-facing workflows.
   Count all complete message envelopes/payloads; idle streaming samples zero.
   Retry retains history until the next attempt resets it.
 
-## MCP teacher (read-only phase 1)
+## MCP teacher (read-only default, assisted phase 2)
 
-The viewer explicitly enables a same-user private Unix socket (`--teacher` or View
-menu), with a visible revoke button including fullscreen. One bounded IPC worker
-reads the existing session snapshot; it never holds a session command sender.
+The viewer explicitly enables a same-user private Unix socket (`--teacher` or the
+top-toolbar robot button, tooltip **Toggle MCP**). The same control pair remains
+available at the top in fullscreen; there are no menu/status/footer duplicates.
+One bounded IPC worker reads the existing session snapshot. It can queue/cancel bounded assisted gestures,
+but never holds a session command sender or an IPC capability to enable assistance.
 Observations retain at most 16 weak framebuffer references for 60 seconds. PNGs
 are at most 2048 pixels per edge; live framebuffer locks cover only a bounded copy,
 not rotation/PNG encoding. Local teaching rectangles map crop/resize coordinates
@@ -83,14 +89,50 @@ The optional MCP executable has no GPUI/output-device dependency. Poppler import
 keeps page-separated text and a bounded lexical passage index in memory, retaining
 citations, printed labels and a PDF fingerprint. Optional page rendering and import
 have subprocess deadlines/output limits. Manual tools work without the viewer.
-MCP advertises exactly six tools; overlay writes are honestly annotated as local
-non-destructive mutations, rather than claiming to be read-only operations.
+MCP advertises twelve tools. Overlay writes are local non-destructive mutations;
+input tools are honestly annotated as potentially destructive, non-idempotent
+mutations. While MCP is enabled, its adjacent **Allow assistance** switch is the
+single global input approval. It is hidden/reset when MCP is off; enabling MCP
+alone is read-only. It has no permission timer, focus reset, Settings switch or
+per-gesture approval UI. The viewer keeps the toggle on across focus/Settings,
+local takeover and connection/source changes until off, sharing disable or shutdown;
+it is not persisted. Only local UI can enable it; MCP cannot enable permission.
+
+The GUI-independent `control.rs` layer shares `input.rs` wire construction. The
+session worker alone executes gestures, records socket-written steps and releases
+on completion/cancel. Queue and execution deadlines are 5 seconds, capped by the
+referenced observation's expiry; these bound a gesture, not global authorization.
+Failed writes are uncertain and never replayed. Local input cancels/releases agent
+ownership first; held/in-flight local inputs block new gestures without resetting
+the toggle. Source changes cancel old work and invalidate observations, not global
+permission. All pre-action/in-action observations are consumed for subsequent input.
+Switch assistance off to cancel/release input while keeping sharing enabled, or
+click the robot to also disable sharing and clear overlays. `mpc_cancel` cancels
+only the current action. There is no bottom control bar. Workspace clipping keeps
+analyzer/notification layers away from the toolbar; fullscreen reuses the same
+MCP controls above the workspace. The robot reserves a fixed switch slot so it
+cannot move under the pointer and turn a second click into accidental permission.
+Non-interactive cursor, held ring, actual drag
+path, signed scroll feedback and hidden-content key/text labels remain outside
+captures/recordings and below modal UI.
 
 Synthetic stdio tests cover MCP initialization/tool dispatch, manual search/read,
 page PNGs, rotated/downscaled screen captures, highlights/clear, stale-source
-rejection and absent mutation tools. IPC/unit tests cover permission/framing bounds,
-active/stale sockets, observation TTL, fit/pan transforms and overlay-free captures.
-No device automation is performed by these tests or the MCP handlers.
+rejection and disabled-input rejection. IPC/unit tests cover permission/framing
+bounds, active/stale sockets, observation TTL, fit/pan transforms, overlay-free
+captures, authorization/deadlines, consumed observations and failed-write uncertainty.
+Loopback session tests cover all five gestures under one global toggle without
+additional approval, off/cancel release, framebuffer contention, local takeover,
+permission surviving source changes, and no old-work replay after reconfiguration.
+Regression tests include a single large LZ4 rectangle, many expensive rectangles,
+release/observation deadlines during decoding, release before joining a slow codec
+on session shutdown, human ownership while readers block pixels, and cancellation
+of queued agent work before its first write. Decoder
+unit tests enforce one in-flight job, result/error propagation and reader-safe shutdown.
+Tests never connect to real hardware. Socket-written is not device-acknowledged or
+visually verified; broader phase-2 live rendering/input acceptance remains open.
+Two separately authorized live MPC menu-navigation clicks were visually verified;
+see `docs/mcp-mpc.md` for the limited evidence.
 
 A subsequent live Pi session exercised all six tools against the running viewer,
 including a manual page image and user-confirmed on-screen guidance. The user
