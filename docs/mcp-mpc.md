@@ -37,7 +37,9 @@ the MCP executable attaches through local IPC. Manual lookup works even when the
 viewer is closed. Later a headless host can implement the same controller contract.
 Neither GPUI nor an audio output device is a dependency of the MCP executable.
 Existing socket ownership, framing, authentication, ACKs and audio decoding remain
-in the current session worker.
+in the current session worker. A bounded pixel-decoder helper accepts one frame at
+a time, with no socket access or early ACK; the owner remains available for input
+and release while decoding or waiting for framebuffer readers.
 
 The bridge is **off by default**, explicitly enabled in the viewer, visibly marked,
 and immediately revocable. Socket directory and socket are private to the current
@@ -280,10 +282,14 @@ so enable assistance only for a trusted client/model. No per-agent authenticatio
 or semantic classification of generic clicks is provided.
 
 Individual queue and execution deadlines remain **5 seconds**, capped by observation
-expiry. These bound a gesture/release, **not** global permission. The worker checks
-cancellation even while waiting for a framebuffer reader, and releases on completion
-or cancellation. Failed/partial writes report uncertainty and are never replayed;
-a broken connection cannot guarantee release. An in-flight write cannot be recalled.
+expiry. These bound a gesture/release, **not** global permission. A one-job decoder
+keeps slow codecs/conversion and framebuffer-reader waits off the socket owner.
+The owner checks cancellation/deadlines and processes local takeover at 50 ms wait
+intervals, releasing on completion/cancel without waiting for pixel decoding.
+Deltas remain ordered and ACKed only after completion; teardown attempts socket
+release before joining the decoder. Failed/partial writes report uncertainty and
+are never replayed; a broken connection cannot guarantee release. An in-flight
+write cannot be recalled.
 
 The GUI-independent `control.rs` layer shares `input.rs` wire construction. The
 session worker alone executes input and rechecks source/capabilities. It releases/
@@ -291,7 +297,9 @@ cancels the agent's entire gesture **before** sending local viewer input; held
 human input and in-flight writes block new agent gestures without resetting global
 authorization. Physical device takeover cannot be reliably detected.
 
-Normal/fullscreen feedback shows an agent crosshair, held ring, actual traversed
+Normal/fullscreen Stop/Cancel controls reserve a row below the workspace, outside
+both the analyzer and notification layers; only modal UI can obscure them.
+Feedback shows an agent crosshair, held ring, actual traversed
 drag path/end markers, signed scroll arrow and non-sensitive key/text label above
 pixels and below modal UI, without input hitboxes. Queued feedback is amber, running
 cyan, completed green and rejected/cancelled/uncertain red. Terminal graphics fade
@@ -305,10 +313,22 @@ permission surviving action completion/cancellation and source changes, no old-w
 replay, local takeover ordering, framebuffer contention, capability/source rechecks,
 stale observations, deadlines, bounded paths/text, hidden text, failed-write
 uncertainty and off/on races. Stdio tests enumerate twelve tools and retain manual,
-image, highlight and disabled-input rejection coverage. No test contacts real Force.
+image, highlight and disabled-input rejection coverage. Decoder regressions cover
+single-large/many-rectangle LZ4 workloads, off/cancel/deadline release and local
+input during decoding, release before a codec join on shutdown, human-held
+ownership during reader contention, and queued
+human input cancelling the agent before its first socket write. One-job bounds,
+protocol errors and reader-safe decoder shutdown have unit coverage. No automated
+test contacts real Force.
 
-Desktop/MCP tests, Clippy and Rust 1.88 checks do **not** establish live rendering or
-actual device effects. Hands-on menu/Stop/fullscreen behavior, fit/pan/rotation,
+A separately authorized live MPC smoke test opened its main menu and returned to
+Main Mode using two `mpc_click` actions, with a new screenshot verifying each result.
+No project edits or playback were initiated. Model/firmware metadata remained
+absent: this is narrow click-navigation evidence, not Force/manual compatibility
+or acceptance of every gesture.
+
+Desktop/MCP tests, Clippy and Rust 1.88 checks do **not** establish live rendering.
+Hands-on safety-row/analyzer/notification/Stop/fullscreen behavior, fit/pan/rotation,
 real-network failures and native macOS/broader hardware coverage remain unverified.
 Phase-1 live teaching evidence above is not phase-2 acceptance.
 

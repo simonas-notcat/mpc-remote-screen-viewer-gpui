@@ -82,7 +82,8 @@ impl Viewer {
                 cx.listener(|view, _, window, cx| view.toggle_teacher(&AiTeacher, window, cx)),
             )
     }
-    /// This surface is local-only and is also rendered in fullscreen, below modals.
+    /// A local-only safety row below the workspace, also in fullscreen. It reserves
+    /// layout space rather than competing with analyzer/notification overlays.
     pub(super) fn teacher_controls(&self, cx: &mut Context<Self>) -> AnyElement {
         let feedback = self
             .teacher_control
@@ -92,10 +93,9 @@ impl Viewer {
         let description = feedback.map(|f| format!("AI #{} · {:?} · {} · {}/{} steps written{}", f.id, f.phase, f.summary, f.written_steps, f.total_steps, if f.held { " · HELD" } else { "" }))
             .unwrap_or_else(|| "Assistance ON · agents can interact without additional approval, including while this window is unfocused.".into());
         div()
-            .absolute()
-            .bottom_8()
-            .left_2()
-            .right_2()
+            .id("assistance-controls")
+            .w_full()
+            .flex_shrink_0()
             .occlude()
             .flex()
             .items_center()

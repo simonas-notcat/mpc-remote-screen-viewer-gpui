@@ -1667,7 +1667,11 @@ impl Render for Viewer {
                     .flex_1()
                     .min_h_0()
                     .child(content)
-                    .when_some(information_panel, |this, panel| this.child(panel)),
+                    .when_some(information_panel, |this, panel| this.child(panel))
+                    .when(self.analyzer.is_some(), |this| {
+                        this.child(self.analyzer_panel(cx))
+                    })
+                    .child(notifications),
             )
             .when(fullscreen, |this| {
                 this.child(
@@ -1690,6 +1694,8 @@ impl Render for Viewer {
                         .child(self.teacher_indicator(cx)),
                 )
             })
+            // Reserve a safety row OUTSIDE the workspace: neither its analyzer nor
+            // its bottom-anchored notifications can obscure or intercept Stop.
             .when(
                 self.teacher.is_some()
                     && !self.show_settings
@@ -1701,11 +1707,7 @@ impl Render for Viewer {
                             .is_some_and(|f| f.phase.active() || f.overlay_visible)),
                 |this| this.child(self.teacher_controls(cx)),
             )
-            .when(self.analyzer.is_some(), |this| {
-                this.child(self.analyzer_panel(cx))
-            })
             .when_some(status_bar, |this, bar| this.child(bar))
-            .child(notifications)
             .children(dialogs)
     }
 }

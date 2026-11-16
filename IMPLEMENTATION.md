@@ -9,7 +9,7 @@ provides build instructions and user-facing workflows.
 | Area | Status |
 | --- | --- |
 | Protocol/authentication | Bounded protocol-v2 framing and all 16 message types; PBKDF2/HMAC proofs, OS nonces and constant-time server-proof checking. Synthetic fixtures and fragmented/coalesced-message tests. |
-| Session | Background socket worker, serialized writes, bounded commands, cancellable connection/retry, typed terminal failures, exponential jittered network backoff, deadlines, liveness, ACKs, options and metadata. Loopback-tested. |
+| Session | Background socket owner plus a one-job pixel decoder; serialized writes and responsive input/release during slow decoding or reader contention. Bounded commands, cancellable connection/retry, typed failures, backoff, deadlines, liveness, ordered ACKs, options and metadata. Loopback-tested. |
 | Screen | Raw/LZ4/Zstd/solid/JPEG decoding, persistent delta composition, pixel conversion/quantization, four upright rotations, safe reconfiguration, allocation and aggregate decode budgets. |
 | GPUI workspace | Connection card, responsive toolbar, modal General/Audio/Streaming settings, status/notifications, fit/actual size, pan, fullscreen, native menu/dialog integration and background PNG captures. User-reported testing succeeded on macOS and Omarchy Linux; detailed V1 interaction checks remain open. |
 | Remote control | Capability-gated mouse/wheel, touch-only single-contact emulation, US/Linux key mappings, modifiers, synthesized Shift, local shortcut precedence and release-all safety. Core/loopback tests plus user-reported device smoke test; broader K1 checks remain. |
@@ -31,7 +31,11 @@ provides build instructions and user-facing workflows.
   30 s; authentication/protocol/local failures remain visible for explicit retry.
 - Framebuffers cap decoded allocation at 64 MiB. Decode/composite work defaults
   to a per-update budget of 64 Mi rectangle pixels, including failed attempts.
-  Skipped/empty updates are ACKed without needless image conversion.
+  One decoder helper accepts only one in-flight payload, moved without copying;
+  deltas are applied in order and ACKed only after completion, including skipped/
+  empty updates. While waiting, the socket owner services input/Stop/deadlines at
+  50 ms intervals. Human takeover is admitted before advancing agent input. On
+  teardown, socket release precedes joining even a non-interruptible codec call.
 - Presentation keeps the latest image/state rather than queued repaint jobs.
   Framebuffer identity/content revision and session generation guards reject stale
   images. Old GPU images are evicted; RGBA-to-GPUI-BGRA preparation is off-thread.
@@ -101,8 +105,9 @@ ownership first; held/in-flight local inputs block new gestures without resettin
 the toggle. Source changes cancel old work and invalidate observations, not global
 permission. All pre-action/in-action observations are consumed for subsequent input.
 The normal/fullscreen panel provides **Cancel gesture** and **Stop assistance**;
-the latter switches global authorization off. Non-interactive cursor, held ring,
-actual drag path, signed scroll feedback and hidden-content key/text labels remain
+the latter switches global authorization off. This safety row reserves space below
+the workspace, outside the analyzer and notification layers. Non-interactive cursor,
+held ring, actual drag path, signed scroll feedback and hidden-content key/text labels remain
 outside captures/recordings and below modal UI.
 
 Synthetic stdio tests cover MCP initialization/tool dispatch, manual search/read,
@@ -112,9 +117,16 @@ bounds, active/stale sockets, observation TTL, fit/pan transforms, overlay-free
 captures, authorization/deadlines, consumed observations and failed-write uncertainty.
 Loopback session tests cover all five gestures under one global toggle without
 additional approval, off/cancel release, framebuffer contention, local takeover,
-permission surviving source changes, and no old-work replay after reconfiguration. Tests never connect to real hardware. Socket-written is not
-device-acknowledged or visually verified; phase-2 live rendering/input acceptance
-remains open.
+permission surviving source changes, and no old-work replay after reconfiguration.
+Regression tests include a single large LZ4 rectangle, many expensive rectangles,
+release/observation deadlines during decoding, release before joining a slow codec
+on session shutdown, human ownership while readers block pixels, and cancellation
+of queued agent work before its first write. Decoder
+unit tests enforce one in-flight job, result/error propagation and reader-safe shutdown.
+Tests never connect to real hardware. Socket-written is not device-acknowledged or
+visually verified; broader phase-2 live rendering/input acceptance remains open.
+Two separately authorized live MPC menu-navigation clicks were visually verified;
+see `docs/mcp-mpc.md` for the limited evidence.
 
 A subsequent live Pi session exercised all six tools against the running viewer,
 including a manual page image and user-confirmed on-screen guidance. The user

@@ -149,8 +149,10 @@ Switch it off or press **Stop assistance** to cancel queued/running input and
 request release. **Cancel gesture** / `mpc_cancel` stop only the current action and
 leave global assistance on. Local viewer input takes over after agent release,
 without resetting the toggle. Old gestures never replay after source changes.
-Cursor/held/path/scroll feedback reflects worker writes, not model intentions.
-A socket write is **not** visual verification: inspect a fresh screen after every
+Slow pixel decoding or framebuffer readers do not block input release/takeover.
+Stop/Cancel reserve a separate row below the workspace, never behind the analyzer
+or notifications. Cursor/held/path/scroll feedback reflects worker writes, not
+model intentions. A socket write is **not** visual verification: inspect a fresh screen after every
 gesture and never automatically retry uncertain input. Text is limited to 64
 printable ASCII characters; do not send secrets. Physical takeover is not detectable.
 

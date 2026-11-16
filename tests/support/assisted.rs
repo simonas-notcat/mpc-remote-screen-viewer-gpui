@@ -14,6 +14,7 @@ use std::{
 enum DeviceCommand {
     Reconfigure,
     Frame,
+    Update(Message),
     Close,
 }
 struct Device {
@@ -24,6 +25,9 @@ struct Device {
 }
 impl Device {
     fn start() -> (Session, Self) {
+        Self::start_with_size(2)
+    }
+    fn start_with_size(edge: u16) -> (Session, Self) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let reservation = listener.try_clone().unwrap();
         let session = start(&listener, "assisted-test");
@@ -33,7 +37,10 @@ impl Device {
             let (mut socket, _) = listener.accept().unwrap();
             let auth = authenticate(&mut socket, "assisted-test", true);
             success(&mut socket, "assisted-test", &auth);
-            send(&mut socket, fixture("server_init_2x2"));
+            let mut init = fixture("server_init_2x2");
+            init.payload[..2].copy_from_slice(&edge.to_le_bytes());
+            init.payload[2..4].copy_from_slice(&edge.to_le_bytes());
+            send(&mut socket, init);
             assert_eq!(receive(&mut socket).kind, Kind::SetOptions);
             send(&mut socket, fixture("frame_raw_and_solid"));
             socket
@@ -52,6 +59,7 @@ impl Device {
                         send(&mut socket, fixture("frame_raw_and_solid"));
                     }
                     Ok(DeviceCommand::Frame) => send(&mut socket, fixture("frame_raw_and_solid")),
+                    Ok(DeviceCommand::Update(message)) => send(&mut socket, message),
                     Ok(DeviceCommand::Close) | Err(mpsc::TryRecvError::Disconnected) => break,
                     Err(mpsc::TryRecvError::Empty) => {}
                 }
@@ -99,9 +107,10 @@ impl Device {
         )
     }
     fn input(&self) -> Vec<InputEvent> {
-        self.inputs
-            .recv_timeout(Duration::from_secs(3))
-            .expect("Input deadline")
+        self.input_within(Duration::from_secs(3))
+    }
+    fn input_within(&self, timeout: Duration) -> Vec<InputEvent> {
+        self.inputs.recv_timeout(timeout).expect("Input deadline")
     }
     fn no_input(&self) {
         assert!(matches!(
@@ -297,6 +306,169 @@ fn one_global_toggle_runs_all_five_gestures_without_per_gesture_approval() {
     assert!(!control.status().enabled);
     session.request_stop();
 }
+/// Valid compressed updates within the default byte/pixel budgets. Preparing the
+/// payload before holding an agent input keeps compression time out of the test.
+fn expensive_update(edge: u16, rectangles: u16) -> Message {
+    let compressed = lz4_flex::block::compress(&vec![0; usize::from(edge).pow(2) * 4]);
+    let mut payload = 99u32.to_le_bytes().to_vec();
+    payload.push(0);
+    payload.extend(rectangles.to_le_bytes());
+    for _ in 0..rectangles {
+        for v in [0u16, 0, edge, edge] {
+            payload.extend(v.to_le_bytes());
+        }
+        payload.extend([1, 0]);
+        payload.extend((compressed.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&compressed);
+    }
+    Message::new(Kind::FrameUpdate, payload)
+}
+
+#[test]
+fn slow_single_and_many_rectangle_frames_do_not_block_stop_takeover_or_deadlines() {
+    #[derive(Clone, Copy, Debug)]
+    enum Interrupt {
+        Off,
+        SessionStop,
+        Cancel,
+        Human,
+        Deadline,
+    }
+    for (edge, rectangles, interrupt) in [
+        (4096, 1, Interrupt::Off),
+        (4096, 1, Interrupt::SessionStop),
+        (1024, 64, Interrupt::Cancel),
+        (1024, 64, Interrupt::Human),
+        (1024, 64, Interrupt::Deadline),
+    ] {
+        let (session, device) = Device::start_with_size(edge);
+        let control = session.control();
+        let frame = session.snapshot().framebuffer.unwrap();
+        let update = expensive_update(edge, rectangles);
+        control.set_enabled(true);
+        // Direct controller admission supplies a short observation expiry for the
+        // deadline case; all device writes still go through the real socket owner.
+        let ttl = if matches!(interrupt, Interrupt::Deadline) {
+            Duration::from_millis(700)
+        } else {
+            Duration::from_secs(60)
+        };
+        control
+            .submit(
+                &frame,
+                7,
+                (edge, edge),
+                click(2000),
+                control.epoch(),
+                Instant::now() + ttl,
+            )
+            .unwrap();
+        assert_eq!(device.input()[0].kind, 4);
+        device.commands.send(DeviceCommand::Update(update)).unwrap();
+        let until = Instant::now() + Duration::from_secs(3);
+        loop {
+            if matches!(frame.try_read(), Err(std::sync::TryLockError::WouldBlock)) {
+                break;
+            }
+            assert!(
+                Instant::now() < until,
+                "Decoder did not start: {interrupt:?}"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
+        let keys = input::Control::default().key("a", [false; 4]);
+        match interrupt {
+            Interrupt::Off => control.set_enabled(false),
+            Interrupt::SessionStop => session.request_stop(),
+            Interrupt::Cancel => control.cancel(),
+            Interrupt::Human => session
+                .command(Command::Input {
+                    screen: frame.clone(),
+                    events: keys.clone(),
+                })
+                .unwrap(),
+            Interrupt::Deadline => {}
+        }
+        // A whole-frame or even a per-rectangle cooperative callback is too late
+        // for the single-large-rectangle case. Release must not wait for decoding.
+        assert_eq!(
+            device.input_within(Duration::from_secs(1)),
+            [InputEvent::RELEASE_ALL],
+            "{interrupt:?}"
+        );
+        if matches!(interrupt, Interrupt::Human) {
+            assert_eq!(device.input_within(Duration::from_secs(1)), keys);
+        }
+        if matches!(interrupt, Interrupt::SessionStop) {
+            // Teardown may report uncertainty, but the release packet above MUST
+            // arrive before joining a codec which is still finishing this rectangle.
+            assert!(!control.status().enabled);
+        } else {
+            wait_phase(&control, Phase::Cancelled);
+            let status = control.status();
+            assert!(status.feedback.unwrap().release_written);
+            assert_eq!(status.enabled, !matches!(interrupt, Interrupt::Off));
+            assert_eq!(session.snapshot().state, State::Streaming);
+        }
+        session.request_stop();
+    }
+}
+
+#[test]
+fn human_takeover_and_held_ownership_work_while_a_framebuffer_reader_blocks_decoding() {
+    let (session, device) = Device::start();
+    let endpoint = Endpoint::new(&session);
+    let control = session.control();
+    let frame = session.snapshot().framebuffer.unwrap();
+    control.set_enabled(true);
+    endpoint.propose(&endpoint.screen(), click(2000));
+    assert_eq!(device.input()[0].kind, 4);
+    let guard = frame.read().unwrap();
+    device.commands.send(DeviceCommand::Frame).unwrap();
+    thread::sleep(Duration::from_millis(100));
+    let down = input::pointer(4, 0, (0, 0), 0);
+    session
+        .command(Command::Input {
+            screen: frame.clone(),
+            events: vec![down],
+        })
+        .unwrap();
+    assert_eq!(
+        device.input_within(Duration::from_secs(1)),
+        [InputEvent::RELEASE_ALL]
+    );
+    assert_eq!(device.input_within(Duration::from_secs(1)), [down]);
+    wait_phase(&control, Phase::Cancelled);
+    assert!(control.status().human_held);
+    assert!(control.status().enabled);
+    assert!(
+        endpoint
+            .request(Request::Propose {
+                observation_id: endpoint.screen(),
+                gesture: click(100),
+            })
+            .is_err()
+    );
+    session
+        .command(Command::Input {
+            screen: frame.clone(),
+            events: vec![InputEvent::RELEASE_ALL],
+        })
+        .unwrap();
+    assert_eq!(
+        device.input_within(Duration::from_secs(1)),
+        [InputEvent::RELEASE_ALL]
+    );
+    let until = Instant::now() + Duration::from_secs(1);
+    while control.status().human_held {
+        assert!(Instant::now() < until);
+        thread::yield_now();
+    }
+    drop(guard);
+    wait(&session, |s| s.statistics.frames == 2); // No delta/ACK was lost to takeover.
+    session.request_stop();
+}
+
 #[test]
 fn cancellation_works_while_the_session_waits_for_a_framebuffer_reader() {
     let (session, device) = Device::start();

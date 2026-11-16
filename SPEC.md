@@ -33,7 +33,7 @@ audio transmission, a web frontend and a device-side server are outside scope.
 | Module | Responsibility |
 | --- | --- |
 | `protocol.rs`, `auth.rs` | Bounded framing/parsing, message serialization and password proofs |
-| `session.rs` | Socket ownership, connection lifecycle, commands, ACKs and metadata |
+| `session.rs`, `session/decoder.rs` | Socket ownership, responsive input scheduling, one-job pixel decoding, connection lifecycle, ordered ACKs and metadata |
 | `framebuffer.rs`, `viewport.rs` | Rectangle decoding/composition, upright images and viewing transforms |
 | `input.rs` | Linux wire-key mapping and button/modifier/contact bookkeeping |
 | `audio.rs`, `playout.rs`, `audio_output.rs` | Device decoding, bounded source-clock playback and optional CPAL output |
@@ -47,10 +47,15 @@ audio transmission, a web frontend and a device-side server are outside scope.
 | `manual.rs`, `mcp.rs`, `bin/mpc-mcp.rs` | Optional page-preserving manual index and stdio MCP adapter (feature `mcp`) |
 
 One worker owns the TCP socket and serializes all writes with `write_all`.
-Framebuffer deltas are applied in order, while presentation snapshots replace
-older presentation state. ACKs must not depend on GUI paints or recording speed.
-Audio output, analysis, recording, image preparation and settings writes have
-separate background work; none may create an unbounded backlog.
+A bounded decoder helper applies one framebuffer delta at a time; its payload
+is moved, not copied. ACK only after application completes, never after enqueue.
+While decoding or waiting for pixel readers, the socket owner continues servicing
+human input and agent cancellation/deadlines at 50 ms intervals. It admits local
+takeover before advancing an agent step and releases input before joining the
+decoder on teardown. Pixel work cannot occupy the input-scheduling thread.
+Presentation snapshots replace older presentation state. ACKs must not depend on
+GUI paints or recording speed. Audio output, analysis, recording, image preparation
+and settings writes have separate background work; none may create an unbounded backlog.
 
 Audio callbacks must not allocate, wait for a producer, or perform filesystem,
 network or JPEG work. Playback-lock contention produces initialized silence and
@@ -309,9 +314,11 @@ cancels/releases the agent's whole gesture before being sent, with held/in-fligh
 human input blocking new agent gestures. Physical takeover cannot be detected.
 
 Switching off or **Stop assistance** cancels work and requests release. **Cancel
-gesture** / `mpc_cancel` leave global authorization on. Normal/fullscreen local
-feedback shows queued/running/completed/rejected/cancelled/uncertain states, actual
-cursor/held/path/release, signed wheel amounts and non-sensitive key/text labels,
+gesture** / `mpc_cancel` leave global authorization on. Normal/fullscreen safety
+controls reserve their own row below the workspace, so analyzer and notification
+layers cannot cover them. Local feedback shows queued/running/completed/rejected/
+cancelled/uncertain states, actual cursor/held/path/release, signed wheel amounts
+and non-sensitive key/text labels,
 without intercepting input or appearing in captures/recordings. See `docs/mcp-mpc.md`
 for contracts and remaining live acceptance checks.
 
