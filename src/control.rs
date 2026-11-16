@@ -409,7 +409,7 @@ impl Controller {
         let mut inner = self.inner.lock().unwrap();
         inner.maintain();
         json!({"enabled": inner.enabled,
-            "authorization": "The local Allow assistance toggle globally authorizes bounded gestures. No timer or per-gesture approval.",
+            "authorization": "The local toolbar Allow assistance switch, next to the enabled MCP robot button, globally authorizes bounded gestures. No timer or per-gesture approval.",
             "action": inner.feedback, "human_input_held": inner.local_writing || !inner.human.is_empty(),
             "visually_verified": false, "note": "Written means socket write only, not device acknowledgement or visual verification. Never retry uncertain mutations. Physical device takeover cannot be detected."})
     }
@@ -436,7 +436,7 @@ impl Controller {
         }
         if !inner.enabled {
             return Err(
-                "Read-only mode: turn on Allow assistance in the viewer's main menu first".into(),
+                "Read-only mode: turn on the Allow assistance switch next to the MCP robot button in the viewer's top toolbar first".into(),
             );
         }
         if inner.local_writing

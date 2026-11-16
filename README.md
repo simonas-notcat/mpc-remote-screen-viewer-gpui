@@ -117,8 +117,10 @@ See [`docs/mcp-mpc.md`](docs/mcp-mpc.md) for the architecture, phased plan,
 full tool contracts and MCP-client configuration. State/screen capture, Force manual
 search/read and local highlights work in read-only mode. Phase 2 adds bounded
 click/long-press, drag, scroll, key and ASCII-text input, plus cancellation.
-The main-menu **Allow assistance** toggle is global approval: no per-gesture prompts,
-permission timer or focus requirement. It starts off on each app launch. No audio tools exist.
+The top toolbar has one robot-icon **Toggle MCP** button for sharing. While enabled,
+an adjacent **Allow assistance** switch grants global input permission: no per-gesture
+prompts, permission timer or focus requirement. Both default off each app launch.
+No audio tools exist.
 
 Supply `manuals/Force - User Guide - v3.10.1.pdf` locally and install Poppler
 (`pdftotext`; `pdftoppm` for diagram/page images). The manual is indexed in memory;
@@ -131,30 +133,32 @@ cargo build --locked --release --features desktop,mcp
 ./target/release/mpc-mcp --manual '/absolute/path/Force - User Guide - v3.10.1.pdf'
 ```
 
-The viewer's bridge is off by default. `--teacher` or **AI teacher sharing** in the
-main menu explicitly enables read-only sharing through a private same-user Unix
-socket on Linux/macOS. Click **AI teacher · read only · ×**
-to disable immediately; fullscreen also has the indicator. Sharing is never restored from preferences. Screen/manual
-content requested by your agent may reach its configured model. The enabled socket
-is accessible to other processes running as your OS user, not just a particular
-agent. Device credentials and serial numbers are not exported.
+Click the robot icon in the top toolbar (tooltip **Toggle MCP**) to enable
+read-only sharing through a private same-user Unix socket on Linux/macOS. The
+selected icon indicates sharing is on. `--teacher` explicitly starts with sharing
+enabled; otherwise it defaults off and is never restored from preferences.
+Screen/manual content requested by your agent may reach its configured model.
+The socket is accessible to other processes running as your OS user, not just a
+particular agent. Device credentials and serial numbers are not exported.
 
-For device input, switch on **… → Allow assistance** (Linux) or **View → Allow
-assistance** (native menu). This also enables sharing if needed. While checked,
-agent gestures run directly without further approval—even with the viewer unfocused.
-It stays on through Settings, reconnects and screen changes, until you turn it off,
-disable sharing, or close the app. It is not saved across launches.
+While MCP is on, the small switch immediately next to the robot (tooltip **Allow
+assistance**) grants global input permission. Gestures then run directly without
+further approval—even with the viewer unfocused. Permission survives Settings,
+reconnects, screen changes and local takeover until you switch it off, turn MCP
+off, or close the app. Turning MCP back on always starts read-only.
 
-Switch it off or press **Stop assistance** to cancel queued/running input and
-request release. **Cancel gesture** / `mpc_cancel` stop only the current action and
-leave global assistance on. Local viewer input takes over after agent release,
-without resetting the toggle. Old gestures never replay after source changes.
-Slow pixel decoding or framebuffer readers do not block input release/takeover.
-Stop/Cancel reserve a separate row below the workspace, never behind the analyzer
-or notifications. Cursor/held/path/scroll feedback reflects worker writes, not
-model intentions. A socket write is **not** visual verification: inspect a fresh screen after every
-gesture and never automatically retry uncertain input. Text is limited to 64
-printable ASCII characters; do not send secrets. Physical takeover is not detectable.
+Switch assistance off to cancel queued/running input and request release while
+keeping sharing on. Click the robot again to also disable sharing, clear teaching
+overlays and hide/reset the assistance switch. The same pair remains at the top
+in fullscreen; there are no duplicate menu/status-bar toggles or bottom control
+bar. `mpc_cancel` stops only the current action and leaves global assistance on.
+Local viewer input takes over after agent release without resetting permission.
+Old gestures never replay after source changes. Slow pixel decoding or framebuffer
+readers do not block release/takeover. Cursor/held/path/scroll feedback reflects
+worker writes, not model intentions. A socket write is **not** visual verification:
+inspect a fresh screen after every gesture and never automatically retry uncertain
+input. Text is limited to 64 printable ASCII characters; do not send secrets.
+Physical takeover is not detectable.
 
 Highlights have a distinct AI-teacher label, follow fit/pan/rotation, expire within
 10 seconds, and never appear in device screenshots or recordings. Old observations
@@ -198,14 +202,16 @@ retrying. Edit the connection fields and choose **Connect** to retry explicitly.
 
 Once connected, the screen takes the available workspace beneath one fixed-height
 toolbar: device/connection menu, **Fit / 1:1**, remote control, speaker, screenshot,
-recording and fullscreen. At smaller widths capture actions move into the **…**
-overflow menu rather than wrapping. Active control is highlighted; active recording
+recording, fullscreen and the robot MCP toggle/optional assistance switch. At
+smaller widths sizing/capture actions move into **…** rather than wrapping or
+pushing the MCP controls off-screen. Active control is highlighted; active recording
 has a red Stop control and shows elapsed time in the status bar. The status bar
 shows connection health; detailed metrics remain available in the information
 inspector, including playback-lock contention callbacks. Normal quit drains pending
 viewer and audio settings writes.
 Empty or fully skipped updates are ACKed without rebuilding the displayed image.
-Fullscreen hides the toolbar/status bar and provides an Exit fullscreen overlay.
+Fullscreen hides the main toolbar/status bar, retaining the same MCP controls
+at the top alongside Exit fullscreen.
 
 As an additional decoding safeguard, an update has a default aggregate budget of
 64 Mi rectangle pixels (including overlaps and failed decode attempts). Once
@@ -216,9 +222,10 @@ the update is still ACKed. Library callers can set `Config::frame_pixel_budget`.
 and **Streaming** tabs. Volume, live input/output levels, output-device selection
 and target buffering live in Audio; sample rate and output buffer are under
 **Advanced output options**. Preferences save immediately. AI assistance is a
-separate main-menu toggle, not a Settings option; permission is never saved. Dialogs release held remote
-input and keep field editing separate from device keyboard forwarding. Escape
-closes the dialog. Notifications overlay the workspace instead of resizing it.
+toolbar switch next to the enabled MCP robot, not a Settings option; permission
+is never saved. Dialogs release held remote input and keep field editing separate
+from device keyboard forwarding. Escape closes the dialog. Notifications overlay
+the workspace instead of resizing it.
 
 Basic user testing succeeded on macOS and Omarchy Linux; detailed Retina and
 interaction checks remain open.

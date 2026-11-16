@@ -205,7 +205,7 @@ pub fn request(path: &Path, request: &Request) -> Result<Reply, String> {
         write_frame(&mut stream, &bytes, MAX_REQUEST, Duration::from_secs(2))?;
         let bytes = read_frame(&mut stream, MAX_RESPONSE, Duration::from_secs(10))?;
         serde_json::from_slice(&bytes).map_err(io::Error::other)
-    })().map_err(|e| format!("AI teacher viewer unavailable: {e}. Enable AI teacher sharing or Allow assistance in the viewer's main menu."))
+    })().map_err(|e| format!("AI teacher viewer unavailable: {e}. Enable MCP with the robot button (Toggle MCP) in the viewer's top toolbar."))
 }
 
 /// Fixed big-endian u32 length, validated before allocation. A wall-clock deadline

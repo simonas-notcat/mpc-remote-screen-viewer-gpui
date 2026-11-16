@@ -1,7 +1,6 @@
-//! Global assistance toggle and non-interactive device-coordinate feedback.
+//! MCP sharing/assistance state and non-interactive device-coordinate feedback.
 use super::*;
 use gpui::{TextRun, fill, outline, rgba, size};
-use gpui_component::{Sizable, button::ButtonVariants};
 use mpc_remote_screen_viewer_gpui::{
     control::{Feedback, Phase},
     teacher as core,
@@ -9,23 +8,9 @@ use mpc_remote_screen_viewer_gpui::{
 };
 
 impl Viewer {
-    pub(super) fn toggle_assistance(
-        &mut self,
-        _: &AllowAssistance,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let enabled = !self.assistance_on;
-        // One toggle is sufficient: enabling assistance explicitly opts into sharing too.
-        if enabled && self.teacher.is_none() {
-            self.toggle_teacher(&AiTeacher, window, cx);
-            if self.teacher.is_none() {
-                return;
-            }
-        }
-        self.set_assistance_enabled(enabled, cx);
-    }
     pub(super) fn set_assistance_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        // A stale switch callback must never enable input after MCP was switched off.
+        let enabled = enabled && self.teacher.is_some();
         self.assistance_on = enabled;
         if let Some(session) = &self.session {
             session.control().set_enabled(enabled);
@@ -37,100 +22,27 @@ impl Viewer {
             .map(|c| c.status());
         cx.notify();
     }
-    pub(super) fn toggle_teacher(&mut self, _: &AiTeacher, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn toggle_mcp(&mut self, _: &ToggleMcp, _: &mut Window, cx: &mut Context<Self>) {
         self.teacher_highlight = None;
         self.teacher_control = None;
         if let Some(bridge) = self.teacher.take() {
-            self.assistance_on = false;
-            if let Some(session) = &self.session {
-                session.control().set_enabled(false);
-            }
+            self.set_assistance_enabled(false, cx);
             bridge.request_stop();
             cx.background_executor()
                 .spawn(async move { drop(bridge) })
                 .detach();
-            self.message = Some("AI teacher sharing disabled. Local highlights cleared.".into());
         } else {
             match TeacherBridge::start(core::default_socket_path()) {
                 Ok(bridge) => {
                     if let Some(session) = &self.session {
                         bridge.teacher().set_session(session);
                     }
-                    self.message = Some(format!(
-                        "AI teacher sharing enabled. Screen captures can reach your configured model. Allow assistance in the main menu enables device input; the indicator disables sharing. Socket: {}",
-                        bridge.path().display()
-                    ));
                     self.teacher = Some(bridge);
                 }
-                Err(error) => self.message = Some(format!("Could not enable AI teacher: {error}")),
+                Err(error) => self.message = Some(format!("Could not enable MCP sharing: {error}")),
             }
         }
         cx.notify();
-    }
-    pub(super) fn teacher_indicator(&self, cx: &mut Context<Self>) -> Button {
-        Button::new("disable-ai-teacher")
-            .ghost()
-            .small()
-            .h(px(24.0))
-            .label(if self.assistance_on {
-                "AI assistance · ON · ×"
-            } else {
-                "AI teacher · read only · ×"
-            })
-            .tooltip("Disable sharing, revoke agent control and clear teaching overlays")
-            .on_click(
-                cx.listener(|view, _, window, cx| view.toggle_teacher(&AiTeacher, window, cx)),
-            )
-    }
-    /// A local-only safety row below the workspace, also in fullscreen. It reserves
-    /// layout space rather than competing with analyzer/notification overlays.
-    pub(super) fn teacher_controls(&self, cx: &mut Context<Self>) -> AnyElement {
-        let feedback = self
-            .teacher_control
-            .as_ref()
-            .and_then(|s| s.feedback.as_ref());
-        let active = feedback.is_some_and(|f| f.phase.active());
-        let description = feedback.map(|f| format!("AI #{} · {:?} · {} · {}/{} steps written{}", f.id, f.phase, f.summary, f.written_steps, f.total_steps, if f.held { " · HELD" } else { "" }))
-            .unwrap_or_else(|| "Assistance ON · agents can interact without additional approval, including while this window is unfocused.".into());
-        div()
-            .id("assistance-controls")
-            .w_full()
-            .flex_shrink_0()
-            .occlude()
-            .flex()
-            .items_center()
-            .gap_2()
-            .p_2()
-            .bg(rgba(0x07131bf0))
-            .text_color(rgb(0xa5edff))
-            .text_xs()
-            .child(div().flex_1().min_w_0().child(description))
-            .when(active, |row| {
-                row.child(
-                    Button::new("cancel-ai-gesture")
-                        .small()
-                        .label("Cancel gesture")
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            if let Some(control) =
-                                view.teacher.as_ref().and_then(|b| b.teacher().control())
-                            {
-                                control.cancel();
-                            }
-                            cx.notify();
-                        })),
-                )
-            })
-            .when(self.assistance_on, |row| {
-                row.child(
-                    Button::new("stop-ai-assistance")
-                        .small()
-                        .label("Stop assistance")
-                        .on_click(
-                            cx.listener(|view, _, _, cx| view.set_assistance_enabled(false, cx)),
-                        ),
-                )
-            })
-            .into_any_element()
     }
 }
 

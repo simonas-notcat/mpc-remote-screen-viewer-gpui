@@ -290,10 +290,13 @@ overload stops the session rather than silently losing a release transition.
 
 ### Assisted MCP input (phase 2)
 
-**Allow assistance** in the main menu is the single global approval, off on launch.
-Turning it on enables the private bridge if needed. There are no per-gesture prompts,
-permission timer or focus requirements. It stays on across Settings, focus changes,
-local takeover, disconnect/reconnect and screen reconfiguration; explicit off, sharing
+The top-toolbar robot button (tooltip **Toggle MCP**) enables read-only sharing.
+Only while enabled, its adjacent **Allow assistance** switch grants global input
+permission. Both default off on launch; toggling MCP off resets/hides the switch,
+cancels work and requests release. MCP alone never enables input. There are no
+per-gesture prompts, permission timer or focus requirements. Permission stays on
+across Settings, focus changes, local takeover, disconnect/reconnect and screen
+reconfiguration; explicit off, sharing
 disable or app shutdown ends authorization. It is not persisted. IPC cannot enable
 it; unknown arguments such as `confirmed` remain rejected. Generic input is potentially
 destructive, not semantically classified as safe, and must stay within the user's task.
@@ -313,13 +316,14 @@ work without resetting authorization; old gestures are never replayed. Human inp
 cancels/releases the agent's whole gesture before being sent, with held/in-flight
 human input blocking new agent gestures. Physical takeover cannot be detected.
 
-Switching off or **Stop assistance** cancels work and requests release. **Cancel
-gesture** / `mpc_cancel` leave global authorization on. Normal/fullscreen safety
-controls reserve their own row below the workspace, so analyzer and notification
-layers cannot cover them. Local feedback shows queued/running/completed/rejected/
-cancelled/uncertain states, actual cursor/held/path/release, signed wheel amounts
-and non-sensitive key/text labels,
-without intercepting input or appearing in captures/recordings. See `docs/mcp-mpc.md`
+Switching assistance or MCP off cancels work and requests release. `mpc_cancel`
+stops only the current gesture and leaves authorization on. One control pair is
+shown in the normal top toolbar or fullscreen top strip, never duplicated in
+menus/status bars or an additional bottom bar. Workspace clipping prevents
+analyzer/notification layers from covering the normal toolbar. Local feedback shows
+queued/running/completed/rejected/cancelled/uncertain states, actual cursor/held/path/
+release, signed wheel amounts and non-sensitive key/text labels, without
+intercepting input or appearing in captures/recordings. See `docs/mcp-mpc.md`
 for contracts and remaining live acceptance checks.
 
 ## 8. Device audio and analysis
@@ -385,8 +389,12 @@ with show/hide, recent devices, clear attempt status and cancellation. Hide
 editable credentials during an attempt/session. Capture actions move into overflow
 at small widths instead of wrapping. Settings has General, Audio and Streaming
 tabs, releases held local remote-control input, confines focus and closes with Escape.
-**Allow assistance** is a checked main-menu item, independent of Settings and manual
-remote control. Opening/closing Settings or moving focus never resets this toggle.
+The icon-only **Toggle MCP** robot is always in the top toolbar. Its adjacent
+**Allow assistance** switch is visible only while MCP is enabled. Keep this pair
+available at the top in fullscreen; never duplicate it in menus, status bars or a
+bottom control bar. Sizing/capture actions move into overflow at narrow widths to
+reserve space for MCP. These controls are independent of Settings and manual
+remote control. Opening/closing Settings or moving focus never resets permission.
 
 Preferences are app-scoped JSON under `mpc-remote-screen-viewer-rs/` in macOS
 Application Support or Linux `$XDG_CONFIG_HOME` (fallback `~/.config`). This legacy
@@ -465,12 +473,13 @@ password. Help exits without loading settings. Prefer masked UI/environment inpu
 over CLI passwords, which can appear in process listings/history.
 
 `--teacher` explicitly enables the read-only local teacher bridge; this opt-in is
-never persisted. The View menu and a visible indicator (also in fullscreen) can
-disable sharing. The separate optional `mpc-mcp` executable uses stdio and requires
-an approved Force v3.10.1 PDF via `--manual`; `--socket`/`MPC_TEACHER_SOCKET` select
-local IPC only. The main-menu Allow assistance toggle globally authorizes bounded
-phase-2 input without additional prompts; no audio tools exist. Highlights and lifecycle feedback
-reference upright device pixels and are local paint, not framebuffer modifications.
+never persisted. The robot **Toggle MCP** button in the normal/fullscreen top bar
+controls sharing; its selected state indicates sharing is enabled. The separate
+optional `mpc-mcp` executable uses stdio and requires an approved Force v3.10.1 PDF via `--manual`; `--socket`/`MPC_TEACHER_SOCKET` select
+local IPC only. The adjacent Allow assistance toolbar switch globally authorizes
+bounded phase-2 input without additional prompts; no audio tools exist. Highlights
+and lifecycle feedback reference upright device pixels and are local paint, not
+framebuffer modifications.
 Full security/tool/gesture contracts and later phases are in `docs/mcp-mpc.md`.
 
 `scripts/bundle-macos.sh` creates a development `.app` with its own bundle identity,
@@ -517,7 +526,7 @@ ordering, stale-evidence/deadline rejection and partial-write uncertainty.
 | C1 | Preference restoration, recent selection, startup precedence and quit/error paths lack detailed macOS interaction validation. |
 | S1 | Inspector/graphs/scrolling/input occlusion lack detailed macOS validation. |
 | T1 | Basic live Pi teaching and user-confirmed highlight visibility succeeded. Fullscreen/revocation/reconfiguration and macOS teacher IPC still need hands-on tests; absent device model/firmware prevents exact manual compatibility confirmation. Playback captures can return `Framebuffer busy; retry`; bounded capture backoff is not automatic. |
-| T2 | Phase-2 assisted control has synthetic/loopback and desktop compile/lint coverage only. Actual Force effects and live toggle/Stop/fullscreen/fit/pan/rotation rendering remain unverified; phase-1 teaching evidence is not phase-2 acceptance. |
+| T2 | Phase-2 assisted control has synthetic/loopback and desktop compile/lint coverage only. Actual Force effects and live robot/assistance/fullscreen/fit/pan/rotation rendering remain unverified; phase-1 teaching evidence is not phase-2 acceptance. |
 
 User-reported testing has succeeded on macOS and Omarchy Linux. Earlier
 connection, remote-control and screenshot-folder smoke tests also succeeded.

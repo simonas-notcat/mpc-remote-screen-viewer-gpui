@@ -73,8 +73,7 @@ actions!(
         RemoteControl,
         PlayAudio,
         AudioAnalyzer,
-        AiTeacher,
-        AllowAssistance,
+        ToggleMcp,
         AudioSettings,
         DeviceInformation,
         Recording,
@@ -130,10 +129,8 @@ pub fn register_actions(cx: &mut App) {
                 MenuItem::action("Device Information…", DeviceInformation),
                 MenuItem::action("Refresh Screen", Refresh),
                 MenuItem::action("Remote Control (F12)", RemoteControl),
-                MenuItem::action("Allow assistance", AllowAssistance),
                 MenuItem::action("Play Device Audio", PlayAudio),
                 MenuItem::action("Audio Analyzer", AudioAnalyzer),
-                MenuItem::action("AI Teacher sharing", AiTeacher),
                 MenuItem::action("Audio Settings…", AudioSettings),
             ],
         },
@@ -479,7 +476,7 @@ impl Viewer {
                 .or(analyzer_error),
         };
         if launch.teacher {
-            viewer.toggle_teacher(&AiTeacher, window, cx);
+            viewer.toggle_mcp(&ToggleMcp, window, cx);
         }
         viewer
     }
@@ -1619,8 +1616,7 @@ impl Render for Viewer {
             .on_action(cx.listener(Self::play_audio))
             .on_action(cx.listener(Self::audio_settings))
             .on_action(cx.listener(Self::toggle_analyzer))
-            .on_action(cx.listener(Self::toggle_teacher))
-            .on_action(cx.listener(Self::toggle_assistance))
+            .on_action(cx.listener(Self::toggle_mcp))
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, window, cx| {
                 if event.pressed_button != Some(MouseButton::Left) {
                     view.resizing_analyzer = false;
@@ -1666,6 +1662,8 @@ impl Render for Viewer {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
+                    // Workspace panels/toasts must not cover the MCP toolbar controls.
+                    .overflow_hidden()
                     .child(content)
                     .when_some(information_panel, |this, panel| this.child(panel))
                     .when(self.analyzer.is_some(), |this| {
@@ -1673,40 +1671,7 @@ impl Render for Viewer {
                     })
                     .child(notifications),
             )
-            .when(fullscreen, |this| {
-                this.child(
-                    div().absolute().top_2().right_2().occlude().child(
-                        Button::new("exit-fullscreen")
-                            .label("Exit fullscreen · Esc / F11")
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.exit_fullscreen(&ExitFullscreen, window, cx)
-                            })),
-                    ),
-                )
-            })
-            .when(fullscreen && self.teacher.is_some(), |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .top_2()
-                        .left_2()
-                        .occlude()
-                        .child(self.teacher_indicator(cx)),
-                )
-            })
-            // Reserve a safety row OUTSIDE the workspace: neither its analyzer nor
-            // its bottom-anchored notifications can obscure or intercept Stop.
-            .when(
-                self.teacher.is_some()
-                    && !self.show_settings
-                    && (self.assistance_on
-                        || self
-                            .teacher_control
-                            .as_ref()
-                            .and_then(|s| s.feedback.as_ref())
-                            .is_some_and(|f| f.phase.active() || f.overlay_visible)),
-                |this| this.child(self.teacher_controls(cx)),
-            )
+            .when(fullscreen, |this| this.child(self.fullscreen_controls(cx)))
             .when_some(status_bar, |this, bar| this.child(bar))
             .children(dialogs)
     }

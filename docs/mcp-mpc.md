@@ -73,11 +73,14 @@ Feedback is a local GPUI overlay in device coordinates, transformed with the sam
 fit/actual-size/pan geometry as the screen. It never changes the device framebuffer,
 remote input routing, exported screenshots, or recordings.
 
-Phase 1 implements a labeled, high-contrast teaching rectangle and a persistent
-"AI teacher · read only" indicator with a local disable control (including in
-fullscreen). Highlights expire, can be explicitly cleared, and disappear on
-revocation, disconnect, source replacement or screen reconfiguration. Their label
-explicitly identifies them as agent guidance, not actual MPC UI.
+Read-only tools paint a labeled, high-contrast teaching rectangle. The selected
+robot button (**Toggle MCP**) in the top toolbar indicates sharing is enabled;
+click it again to revoke sharing/input and clear overlays. The adjacent **Allow
+assistance** switch appears only while MCP is on. Fullscreen reuses the same pair
+at the top; there are no duplicate status/footer/menu switches. Highlights expire,
+can be explicitly cleared, and disappear on revocation, disconnect, source
+replacement or screen reconfiguration. Their label identifies them as agent
+guidance, not actual MPC UI.
 
 Phase 2 adds a distinct agent cursor and gesture lifecycle events (implemented):
 
@@ -226,7 +229,8 @@ musical pattern is a teaching example, not a preset prescribed by the manual.
 
 Implemented on `feature/mcp-assisted-interaction`, stacked on phase 1. The six
 phase-1 tools remain available; six additional tools queue bounded input or request
-cancellation. **Allow assistance** in the main menu is the single global approval:
+cancellation. The top-toolbar robot (**Toggle MCP**) enables read-only sharing;
+its adjacent **Allow assistance** switch is the single global input approval:
 no per-gesture prompts, permission timer or focus requirement. It starts off on app
 launch, independently of ordinary remote control. MCP/IPC cannot enable it;
 `confirmed: true` and unknown arguments are rejected.
@@ -248,9 +252,10 @@ observation's crop/resize into upright protocol coordinates (never inverse-rotat
 
 ### Global authorization and lifecycle
 
-1. Switch on **… → Allow assistance** (Linux) or **View → Allow assistance**
-   (native menu). This also enables the private teacher bridge if needed. It is
-   global approval for agent input: gestures run without any further local prompt.
+1. Click the top-toolbar robot (**Toggle MCP**) to enable sharing, then switch on
+   **Allow assistance** immediately next to it. The switch is hidden while MCP is
+   off; MCP always starts read-only. This grants global input permission: gestures
+   run without any further local prompt.
    The toggle stays on until explicitly switched off, sharing is disabled, or the
    app closes. It is not timed and is unaffected by window focus or Settings.
 2. Inspect a fresh screen and submit **one** gesture. The tool returns `queued: true`
@@ -267,11 +272,11 @@ observation's crop/resize into upright protocol coordinates (never inverse-rotat
    pixels alone do not invalidate observations. Never blindly queue sequences or
    automatically retry uncertain mutations, including after an IPC timeout.
 
-Switching **Allow assistance** off or pressing **Stop assistance** cancels queued
-work and requests automatic release of held input. `mpc_cancel` / **Cancel gesture**
-stop only the current gesture; they leave global assistance enabled. Disabling
-**AI teacher sharing** also switches assistance off. No permission is restored
-across app launches, but it remains on through focus changes, Settings, disconnect/
+Switching **Allow assistance** off cancels queued work and requests automatic
+release of held input while keeping sharing enabled. `mpc_cancel` stops only the
+current gesture and leaves assistance enabled. Switching the robot (**Toggle MCP**)
+off also disables sharing, resets/hides assistance and clears teaching overlays.
+No permission is restored across app launches, but it remains on through focus changes, Settings, disconnect/
 reconnect, reconfiguration, and local human takeover. Connection/source changes
 still cancel old work and invalidate its observations; nothing is replayed.
 
@@ -297,8 +302,10 @@ cancels the agent's entire gesture **before** sending local viewer input; held
 human input and in-flight writes block new agent gestures without resetting global
 authorization. Physical device takeover cannot be reliably detected.
 
-Normal/fullscreen Stop/Cancel controls reserve a row below the workspace, outside
-both the analyzer and notification layers; only modal UI can obscure them.
+The single robot/assistance pair is in the normal top toolbar or fullscreen top
+strip. No bottom bar, status-bar toggle or duplicate menu switch is shown. Workspace
+clipping keeps analyzer/notification layers away from the normal toolbar; the
+fullscreen controls render above the workspace and below modal UI.
 Feedback shows an agent crosshair, held ring, actual traversed
 drag path/end markers, signed scroll arrow and non-sensitive key/text label above
 pixels and below modal UI, without input hitboxes. Queued feedback is amber, running
@@ -328,7 +335,7 @@ absent: this is narrow click-navigation evidence, not Force/manual compatibility
 or acceptance of every gesture.
 
 Desktop/MCP tests, Clippy and Rust 1.88 checks do **not** establish live rendering.
-Hands-on safety-row/analyzer/notification/Stop/fullscreen behavior, fit/pan/rotation,
+Hands-on robot/switch/analyzer/notification/fullscreen behavior, fit/pan/rotation,
 real-network failures and native macOS/broader hardware coverage remain unverified.
 Phase-1 live teaching evidence above is not phase-2 acceptance.
 
@@ -379,11 +386,13 @@ Install Poppler (`pdftotext` and, for diagrams, `pdftoppm`). Build:
 cargo build --locked --release --features desktop,mcp
 ```
 
-Start the viewer with `--teacher`, or enable **AI teacher sharing** in the main
-menu, for read-only screen sharing. **Allow assistance** in that same menu enables
-sharing plus globally authorized input. Both start off on a new app launch.
-Connect to Force through the normal viewer UI. The AI-teacher indicator disables
-sharing immediately when clicked; the option is not persisted across launches.
+Click the robot icon in the top toolbar (tooltip **Toggle MCP**) for read-only
+sharing. When it is selected, the adjacent switch (tooltip **Allow assistance**)
+authorizes global input. Click the robot again to disable sharing and reset/hide
+assistance, or switch assistance off to stop input without disabling sharing. The
+same pair appears at the top in fullscreen; no bottom/status/menu switches remain.
+Both default off on launch; `--teacher` explicitly starts sharing, still read-only.
+Neither is persisted. Connect to Force through the normal viewer UI.
 
 Configure the MCP client to launch the binary using absolute paths:
 
@@ -415,7 +424,7 @@ without tool search. Direct exposure does not grant device control. From the pro
 
 ```sh
 pi mcp add --local force-teacher --exposure direct --cwd "$PWD" \
-  --description 'Force teacher: cited manual, screen observations/highlights; the local Allow assistance menu toggle globally authorizes bounded input. No audio tools.' \
+  --description 'Force teacher: cited manual, screen observations/highlights; the Allow assistance toolbar switch beside the MCP robot globally authorizes bounded input. No audio tools.' \
   -- "$PWD/target/release/mpc-mcp" \
   --manual "$PWD/manuals/Force - User Guide - v3.10.1.pdf"
 ```

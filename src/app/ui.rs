@@ -18,16 +18,21 @@ pub(super) enum SettingsTab {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ToolbarLayout {
+    sizing: bool,
     capture: bool,
     labels: bool,
     fullscreen: bool,
 }
 impl ToolbarLayout {
     fn for_width(width: f32) -> Self {
+        // Reserve the robot + assistance switch even while MCP is off. Secondary
+        // actions move to overflow instead of pushing these controls off-screen.
+        let room = width - 80.0;
         Self {
-            capture: width >= 680.0,
-            labels: width >= 960.0,
-            fullscreen: width >= 800.0,
+            sizing: room >= 520.0,
+            capture: room >= 680.0,
+            labels: room >= 960.0,
+            fullscreen: room >= 800.0,
         }
     }
 }
@@ -254,6 +259,69 @@ impl Viewer {
         window.focus(dialog);
     }
 
+    /// The sole MCP UI: sharing toggle, plus an assistance switch only while on.
+    /// Reused (not duplicated) by the normal toolbar and fullscreen top strip.
+    pub(super) fn mcp_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let enabled = self.teacher.is_some();
+        div()
+            .id("mcp-controls")
+            .occlude()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .h(px(32.0))
+            // Reserve the hidden switch's slot: the robot must not move under
+            // the pointer and turn a second click into accidental input approval.
+            .w(px(76.0))
+            .px(px(4.0))
+            .rounded_md()
+            .bg(rgb(CHROME))
+            .child(
+                tool("toggle-mcp", "robot", "Toggle MCP")
+                    .selected(enabled)
+                    .on_click(
+                        cx.listener(|view, _, window, cx| view.toggle_mcp(&ToggleMcp, window, cx)),
+                    ),
+            )
+            .when(enabled, |this| {
+                this.child(
+                    Switch::new("allow-assistance")
+                        .small()
+                        .checked(self.assistance_on)
+                        .tooltip("Allow assistance · turn off to cancel/release agent input")
+                        .on_click(cx.listener(|view, enabled, _, cx| {
+                            view.set_assistance_enabled(*enabled, cx)
+                        })),
+                )
+            })
+            .into_any_element()
+    }
+
+    pub(super) fn fullscreen_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .absolute()
+            .top_2()
+            .left_2()
+            .right_2()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(self.mcp_controls(cx))
+            .child(
+                div().occlude().child(
+                    Button::new("exit-fullscreen")
+                        .small()
+                        .h(px(32.0))
+                        .label("Exit fullscreen · Esc / F11")
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.exit_fullscreen(&ExitFullscreen, window, cx)
+                        })),
+                ),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn toolbar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let connected = self.snapshot.state == State::Streaming;
         let attempting = self.has_active_session();
@@ -328,40 +396,42 @@ impl Viewer {
                 ),
             )
             .when(attempting, |this| {
-                this.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .p_1()
-                        .rounded_md()
-                        .bg(rgb(BACKGROUND))
-                        .child(
-                            Button::new("fit")
-                                .ghost()
-                                .small()
-                                .label("Fit")
-                                .selected(!self.viewport.actual_size)
-                                .disabled(!connected)
-                                .tooltip("Fit to window")
-                                .on_click(
-                                    cx.listener(|view, _, window, cx| view.fit(&Fit, window, cx)),
-                                ),
-                        )
-                        .child(
-                            Button::new("actual-size")
-                                .ghost()
-                                .small()
-                                .label("1:1")
-                                .selected(self.viewport.actual_size)
-                                .disabled(!connected)
-                                .tooltip("Actual size")
-                                .on_click(cx.listener(|view, _, window, cx| {
-                                    view.actual_size(&ActualSize, window, cx)
-                                })),
-                        ),
-                )
-                .child(separator())
+                this.when(layout.sizing, |this| {
+                    this.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .p_1()
+                            .rounded_md()
+                            .bg(rgb(BACKGROUND))
+                            .child(
+                                Button::new("fit")
+                                    .ghost()
+                                    .small()
+                                    .label("Fit")
+                                    .selected(!self.viewport.actual_size)
+                                    .disabled(!connected)
+                                    .tooltip("Fit to window")
+                                    .on_click(cx.listener(|view, _, window, cx| {
+                                        view.fit(&Fit, window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("actual-size")
+                                    .ghost()
+                                    .small()
+                                    .label("1:1")
+                                    .selected(self.viewport.actual_size)
+                                    .disabled(!connected)
+                                    .tooltip("Actual size")
+                                    .on_click(cx.listener(|view, _, window, cx| {
+                                        view.actual_size(&ActualSize, window, cx)
+                                    })),
+                            ),
+                    )
+                    .child(separator())
+                })
                 .child(
                     tool(
                         "control",
@@ -433,6 +503,7 @@ impl Viewer {
                     ))
                 })
             })
+            .child(self.mcp_controls(cx))
             .child(self.overflow_menu(layout, connected, cx))
             .into_any_element()
     }
@@ -446,8 +517,7 @@ impl Viewer {
         let focus = self.focus.clone();
         let stats = self.show_stats;
         let analyzer = self.analyzer.is_some();
-        let teacher = self.teacher.is_some();
-        let assistance = self.assistance_on;
+        let actual_size = self.viewport.actual_size;
         let recording = self.recorder.is_some();
         let recording_pending = self.recording_pending;
         let capture_pending = self.capture_pending;
@@ -456,12 +526,19 @@ impl Viewer {
             move |menu, _, _| {
                 menu.action_context(focus.clone())
                     .min_w(px(220.0))
-                    .item(
-                        PopupMenuItem::new("Allow assistance")
-                            .checked(assistance)
-                            .action(Box::new(AllowAssistance)),
-                    )
-                    .separator()
+                    .when(!layout.sizing, |menu| {
+                        menu.item(
+                            PopupMenuItem::new("Fit to window")
+                                .checked(!actual_size)
+                                .action(Box::new(Fit)),
+                        )
+                        .item(
+                            PopupMenuItem::new("Actual size (1:1)")
+                                .checked(actual_size)
+                                .action(Box::new(ActualSize)),
+                        )
+                        .separator()
+                    })
                     .when(!layout.capture, |menu| {
                         menu.menu_with_disabled(
                             "Screenshot",
@@ -487,11 +564,6 @@ impl Viewer {
                             .action(Box::new(Statistics)),
                     )
                     .menu("Device information", Box::new(DeviceInformation))
-                    .item(
-                        PopupMenuItem::new("AI teacher sharing")
-                            .checked(teacher)
-                            .action(Box::new(AiTeacher)),
-                    )
                     .separator()
                     .item(
                         PopupMenuItem::new("Audio analyzer")
@@ -786,9 +858,6 @@ impl Viewer {
                 this.child(format!("· {w} × {h}"))
             })
             .child(div().flex_1())
-            .when(self.teacher.is_some(), |this| {
-                this.child(self.teacher_indicator(cx))
-            })
             .when(self.recorder.is_some(), |this| {
                 this.child(status_dot(DANGER))
                     .child(format!("REC {}", elapsed_label(self.recording_seconds)))
@@ -1269,16 +1338,19 @@ mod tests {
         assert_eq!(
             ToolbarLayout::for_width(480.0),
             ToolbarLayout {
+                sizing: false,
                 capture: false,
                 labels: false,
                 fullscreen: false
             }
         );
-        assert!(!ToolbarLayout::for_width(679.0).capture);
-        assert!(ToolbarLayout::for_width(680.0).capture);
-        assert!(ToolbarLayout::for_width(800.0).fullscreen);
-        assert!(!ToolbarLayout::for_width(959.0).labels);
-        assert!(ToolbarLayout::for_width(960.0).labels);
+        assert!(!ToolbarLayout::for_width(599.0).sizing);
+        assert!(ToolbarLayout::for_width(600.0).sizing);
+        assert!(!ToolbarLayout::for_width(759.0).capture);
+        assert!(ToolbarLayout::for_width(760.0).capture);
+        assert!(ToolbarLayout::for_width(880.0).fullscreen);
+        assert!(!ToolbarLayout::for_width(1039.0).labels);
+        assert!(ToolbarLayout::for_width(1040.0).labels);
     }
 
     #[test]
