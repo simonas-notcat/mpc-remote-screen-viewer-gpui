@@ -149,6 +149,143 @@ fn plans_enforce_capabilities_bounds_sizes_and_release_pairs() {
         .is_err()
     );
 }
+fn double_tap() -> Gesture {
+    Gesture::DoubleTap {
+        target: Point { x: 12, y: 34 },
+    }
+}
+#[test]
+fn double_tap_plan_has_four_timed_edges_and_validates_target_and_capability() {
+    for (caps, down, up) in [(1, 0, 2), (2, 4, 5), (7, 4, 5)] {
+        let plan = Plan::new(double_tap(), caps, (200, 100)).unwrap();
+        assert_eq!(plan.steps.len(), 4);
+        assert_eq!(plan.feedback.gesture, "double_tap");
+        for (step, (ms, kind, held)) in plan.steps.iter().zip([
+            (0, down, true),
+            (60, up, false),
+            (160, down, true),
+            (220, up, false),
+        ]) {
+            assert_eq!(step.at, Duration::from_millis(ms));
+            assert_eq!(step.events, [input::pointer(kind, 0, (12, 34), 0)]);
+            assert_eq!(step.position, Some(Point { x: 12, y: 34 }));
+            assert_eq!(step.held, held);
+        }
+    }
+    for caps in [0, 4] {
+        assert!(Plan::new(double_tap(), caps, (200, 100)).is_err());
+    }
+    assert!(Plan::new(double_tap(), 7, (0, 0)).is_err());
+    for target in [
+        Point { x: 200, y: 0 },
+        Point { x: 0, y: 100 },
+        Point { x: u32::MAX, y: 1 },
+    ] {
+        assert!(Plan::new(Gesture::DoubleTap { target }, 7, (200, 100)).is_err());
+    }
+}
+#[test]
+fn double_tap_runs_as_one_action_with_release_and_consumes_observations() {
+    let (controller, screen) = setup();
+    let before = controller.epoch();
+    submit(&controller, &screen, double_tap());
+    let mut running = None;
+    assert_eq!(
+        drive(&controller, &mut running, &screen),
+        [input::pointer(4, 0, (12, 34), 0)]
+    );
+    // The second edge is not due immediately, and no second action can interleave.
+    running.as_mut().unwrap().started = Instant::now() + Duration::from_secs(60);
+    assert!(drive(&controller, &mut running, &screen).is_empty());
+    let during = controller.epoch();
+    assert!(
+        controller
+            .submit(&screen, 7, (200, 100), click(), during, expires())
+            .is_err()
+    );
+    assert_eq!(
+        finish(&controller, &mut running, &screen),
+        [
+            input::pointer(5, 0, (12, 34), 0),
+            input::pointer(4, 0, (12, 34), 0),
+            input::pointer(5, 0, (12, 34), 0),
+            InputEvent::RELEASE_ALL,
+        ]
+    );
+    let feedback = controller.status().feedback.unwrap();
+    assert_eq!(feedback.phase, Phase::Completed);
+    assert_eq!(feedback.written_steps, 4);
+    assert!(feedback.release_written);
+    assert!(!feedback.held);
+    for epoch in [before, during] {
+        assert!(
+            controller
+                .submit(&screen, 7, (200, 100), double_tap(), epoch, expires())
+                .is_err()
+        );
+    }
+}
+#[test]
+fn double_tap_stops_at_every_edge_without_sending_remaining_taps() {
+    for edges in 1..=3 {
+        for stop in 0..3 {
+            let (controller, screen) = setup();
+            submit(&controller, &screen, double_tap());
+            let mut running = None;
+            drive(&controller, &mut running, &screen);
+            for _ in 1..edges {
+                running.as_mut().unwrap().started = Instant::now() - Duration::from_secs(1);
+                drive(&controller, &mut running, &screen);
+            }
+            assert_eq!(controller.status().feedback.unwrap().held, edges % 2 == 1);
+            match stop {
+                0 => controller.cancel(),
+                1 => controller.set_enabled(false),
+                _ => running.as_mut().unwrap().deadline = Instant::now(),
+            }
+            assert_eq!(
+                drive(&controller, &mut running, &screen),
+                [InputEvent::RELEASE_ALL]
+            );
+            assert!(running.is_none());
+            let feedback = controller.status().feedback.unwrap();
+            assert_eq!(feedback.phase, Phase::Cancelled);
+            assert_eq!(feedback.written_steps, edges);
+            assert!(feedback.release_written);
+        }
+    }
+}
+#[test]
+fn double_tap_write_failures_are_uncertain_and_never_replayed() {
+    // Includes failure on the final release-all, after all four tap edges.
+    for successful_edges in 0..=4 {
+        let (controller, screen) = setup();
+        submit(&controller, &screen, double_tap());
+        let mut running: Option<Running> = None;
+        let mut writes = 0;
+        loop {
+            if let Some(run) = running.as_mut() {
+                run.started = Instant::now() - Duration::from_secs(1);
+            }
+            let result = controller.drive(&mut running, &screen, 7, |_| {
+                if writes == successful_edges {
+                    return Err("partial write");
+                }
+                writes += 1;
+                Ok(())
+            });
+            if result.is_err() {
+                break;
+            }
+        }
+        drop(running);
+        let feedback = controller.status().feedback.unwrap();
+        assert_eq!(feedback.phase, Phase::Uncertain);
+        assert_eq!(feedback.written_steps, successful_edges);
+        assert!(!feedback.release_written);
+        assert!(drive(&controller, &mut None, &screen).is_empty());
+    }
+}
 #[test]
 fn keyboard_text_are_bounded_fully_released_and_never_echoed() {
     for text in ["", "has\nnewline", "\t", "é", &"a".repeat(65)] {

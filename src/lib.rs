@@ -11,8 +11,6 @@ pub mod control;
 pub mod framebuffer;
 pub mod information;
 pub mod input;
-#[cfg(feature = "mcp")]
-pub mod manual;
 #[cfg(all(feature = "mcp", unix))]
 pub mod mcp;
 pub mod playout;

@@ -214,7 +214,7 @@ fn screen(teacher: &Teacher) -> String {
 }
 
 #[test]
-fn one_global_toggle_runs_all_five_gestures_without_per_gesture_approval() {
+fn one_global_toggle_runs_all_six_gestures_without_per_gesture_approval() {
     let (session, device) = Device::start();
     let endpoint = Endpoint::new(&session);
     let control = session.control();
@@ -241,6 +241,22 @@ fn one_global_toggle_runs_all_five_gestures_without_per_gesture_approval() {
             })
             .is_err()
     );
+
+    endpoint.propose(
+        &endpoint.screen(),
+        Gesture::DoubleTap {
+            target: Point { x: 1, y: 1 },
+        },
+    );
+    for kind in [4, 5, 4, 5] {
+        assert_eq!(device.input(), [input::pointer(kind, 0, (1, 1), 0)]);
+    }
+    assert_eq!(device.input(), [InputEvent::RELEASE_ALL]);
+    wait_phase(&control, Phase::Completed);
+    let feedback = control.status().feedback.unwrap();
+    assert_eq!(feedback.gesture, "double_tap");
+    assert_eq!(feedback.written_steps, 4);
+    assert!(feedback.release_written);
 
     endpoint.propose(
         &endpoint.screen(),
